@@ -175,9 +175,12 @@ const switchedTo: Record<Exclude<Fallback['reason'], 'none'>, string> = {
  * login to replace it, kept its model and waits for the user.
  */
 function FellBack({ entry }: { entry: EntryRecord }) {
-  const { from, to, reason } = entry.data as Fallback
+  const { from, to, reason, blocked } = entry.data as Fallback
   const actions = useUltimate()
   const provider = from.split('/')[0]
+  const why = blocked
+    ? `${provider} is not allowed in this project`
+    : `${provider} has no login here`
   return (
     <section
       className="min-w-0 rounded-md border border-border border-l-2 border-l-warning/60 bg-muted/20"
@@ -185,7 +188,13 @@ function FellBack({ entry }: { entry: EntryRecord }) {
     >
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <CpuIcon className="size-3.5 text-warning" />
-        <span>{to ? 'model switched' : 'needs you · login missing'}</span>
+        <span>
+          {to
+            ? 'model switched'
+            : blocked
+              ? 'needs you · provider not allowed'
+              : 'needs you · login missing'}
+        </span>
       </header>
       <div className="space-y-2 px-3 py-3 text-[13px] leading-relaxed">
         <p className="font-mono text-[12px]">
@@ -201,24 +210,33 @@ function FellBack({ entry }: { entry: EntryRecord }) {
         </p>
         <p className="text-muted-foreground">
           {reason !== 'none'
-            ? `${provider} has no login here, so this conversation now runs on ${switchedTo[reason]}.`
-            : `${provider} has no login here, and no subscription login can take over, so this conversation keeps its model and its requests fail until you log in to ${provider}.`}{' '}
+            ? `${why}, so this conversation now runs on ${switchedTo[reason]}.`
+            : blocked
+              ? `${why}, and no other subscription login can take over, so this conversation keeps its model and its requests fail until you pick another.`
+              : `${why}, and no subscription login can take over, so this conversation keeps its model and its requests fail until you log in to ${provider}.`}{' '}
           <button
             className="cursor-pointer text-foreground hover:underline"
             onClick={() => openPicker(actions)}
             type="button"
           >
             Pick another
-          </button>{' '}
-          or{' '}
-          <button
-            className="cursor-pointer text-foreground hover:underline"
-            onClick={() => openLogin(actions)}
-            type="button"
-          >
-            log in
           </button>
-          .
+          {blocked ? (
+            '.'
+          ) : (
+            <>
+              {' '}
+              or{' '}
+              <button
+                className="cursor-pointer text-foreground hover:underline"
+                onClick={() => openLogin(actions)}
+                type="button"
+              >
+                log in
+              </button>
+              .
+            </>
+          )}
         </p>
       </div>
     </section>

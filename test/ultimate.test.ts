@@ -16,6 +16,7 @@ import { Branch, Roots } from '../extensions/lineage/api.ts'
 import { rootOf } from '../extensions/lineage/server.ts'
 import { Standing } from '../extensions/subagents/api.ts'
 import { parseDefinition } from '../lib/agents.ts'
+import { blockedProviders } from '../extensions/models/scope.ts'
 import { fauxServer, seedTally, sourceCopy, temp, removeTemp, until, post } from './helpers.ts'
 
 type Server = Awaited<ReturnType<typeof fauxServer>>
@@ -33,7 +34,10 @@ function textOf(content: unknown): string {
         .flatMap((p) => (p.type === 'text' ? [p.text!] : []))
         .join('')
 }
-async function fixture(onRequest?: (text: string, home: string) => Promise<void>) {
+async function fixture(
+  onRequest?: (text: string, home: string) => Promise<void>,
+  settings: object = {},
+) {
   const home = await temp('ultimate-agent-')
   homes.push(home)
   const root = await sourceCopy(home)
@@ -51,7 +55,7 @@ async function fixture(onRequest?: (text: string, home: string) => Promise<void>
   // @ultimate's definition names web_search and web_fetch, which come with the default-off parallel.
   await writeFile(
     join(home, '.ultimate/settings.json'),
-    JSON.stringify({ extensions: { enable: ['parallel'] } }),
+    JSON.stringify({ extensions: { enable: ['parallel'] }, ...settings }),
   )
   const requests: string[] = []
   const open = async () => {
@@ -527,4 +531,32 @@ it.concurrent('keeps a model whose login check is pending or failed, and never t
   expect((await fallbacks()).map((e) => e.data)).toEqual([
     { from: 'openai-codex/gpt-6.1-sol', reason: 'none' },
   ])
+})
+
+it.concurrent('keeps a provider the user allows only in other projects out of this one, and says why it switched', async () => {
+  const f = await fixture(undefined, {
+    providers: { 'github-copilot': { onlyIn: ['~/elsewhere/**'] } },
+  })
+  const runtime = f.server.host.modelRuntime
+  expect(runtime.getModels('github-copilot')).toEqual([])
+  expect(runtime.getModels('openai-codex').length).toBeGreaterThan(0)
+  const dice = await f.subagents.standing('dice', context)
+  const copilot = { provider: 'github-copilot', modelId: 'gpt-5' }
+  await f.server.harness.commit((tx) => configure(tx, dice, { model: copilot }), context)
+  await ask(f.server, dice, 'roll')
+  const fallbacks = (await entries(f.server, dice)).filter((e) => e.kind === 'models.fallback')
+  // A subscription takes only another subscription, as without a login; the entry says the project is the reason.
+  expect(fallbacks.map((e) => e.data)).toEqual([
+    { from: 'github-copilot/gpt-5', reason: 'none', blocked: true },
+  ])
+  expect(fallbacks[0].model?.[0]?.content).toContain('is not allowed in this project')
+})
+
+it('blocks a provider in every project whose main checkout matches none of its globs', () => {
+  const settings = { providers: { 'github-copilot': { onlyIn: ['~/Projects/my-org/**'] } } }
+  expect(blockedProviders(settings, '/home/me/Projects/my-org/app', '/home/me')).toEqual([])
+  expect(blockedProviders(settings, '/home/me/Projects/other/app', '/home/me')).toEqual([
+    'github-copilot',
+  ])
+  expect(blockedProviders({}, '/anywhere', '/home/me')).toEqual([])
 })

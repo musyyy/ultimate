@@ -30,6 +30,7 @@ export async function fallback(
   host: ExtensionHost,
   tx: Tx,
   conversationId: ConversationId,
+  blocked: ReadonlySet<string>,
 ): Promise<{ entries: EntryDraft[] } | undefined> {
   const agent = await tx.doc(AgentDoc, conversationId)
   const runtime = host.modelRuntime
@@ -37,9 +38,11 @@ export async function fallback(
   // Nothing has a login yet (an empty snapshot says nothing about this model), or this one still has one.
   if (!agent.model || !available.length || hasLogin(available, agent.model)) return undefined
   const from = agent.model
+  // A provider the user's settings keep out of this project still has its login, but no models here.
+  const barred = blocked.has(from.provider)
   // Certain evidence only: the snapshot has no login for it and a fresh check agrees. A provider still registering,
   // or a check that fails or times out, leaves the model as it is; its request fails with its own error.
-  if (runtime.getProvider(from.provider) && (await mayHaveLogin(host, from.provider)))
+  if (!barred && runtime.getProvider(from.provider) && (await mayHaveLogin(host, from.provider)))
     return undefined
   const fresh = runtime.getAvailableSnapshot()
   const paid = wasSubscription(host, from.provider)
@@ -56,9 +59,11 @@ export async function fallback(
     [configuredModel(fresh, host.settings, await familyDefault(host)), 'default'],
   ]
   const found = candidates.find(([ref]) => hasLogin(fresh, ref) && allowed(ref!.provider))
-  const data: Fallback = found
-    ? { from: name(from), to: name(found[0]!), reason: found[1] }
-    : { from: name(from), reason: 'none' }
+  const data: Fallback = {
+    from: name(from),
+    ...(found ? { to: name(found[0]!), reason: found[1] } : { reason: 'none' as const }),
+    ...(barred && { blocked: true as const }),
+  }
   if (!found && (await alreadyAsked(tx, conversationId, data.from))) return undefined
   if (found) {
     const to = found[0]!
@@ -67,9 +72,10 @@ export async function fallback(
     if (model && agent.thinkingLevel)
       agent.thinkingLevel = clampThinkingLevel(model, agent.thinkingLevel)
   }
+  const why = barred ? 'is not allowed in this project' : 'has no login here'
   const content = found
-    ? `Model ${data.from} has no login here; this conversation now runs on ${data.to}.`
-    : `Model ${data.from} has no login here and no subscription login can replace it, so this conversation keeps it until the user logs in to ${from.provider} or picks another model.`
+    ? `Model ${data.from} ${why}; this conversation now runs on ${data.to}.`
+    : `Model ${data.from} ${why} and no subscription login can replace it, so this conversation keeps it until the user ${barred ? 'picks another model' : `logs in to ${from.provider} or picks another model`}.`
   return {
     entries: [
       { kind: 'models.fallback', data, model: [{ role: 'user', content, timestamp: Date.now() }] },

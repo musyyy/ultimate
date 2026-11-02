@@ -36,8 +36,14 @@ export const LogoutAction = actionRef<{ provider: string }, null>('models', 'log
  * A `models.fallback` entry: the conversation's model (`provider/id`) had no login here, so its next run switched to
  * `to`: the same model on another provider, its definition's pin or the default model. Without `to` nothing could
  * replace it (or only a pay-per-token login could replace a subscription), so it kept its model and needs the user.
+ * `blocked`: the provider has a login, but the user's settings do not allow it in this project (`providers.<id>.onlyIn`).
  */
-export type Fallback = { from: string; to?: string; reason: 'same' | 'pin' | 'default' | 'none' }
+export type Fallback = {
+  from: string
+  to?: string
+  reason: 'same' | 'pin' | 'default' | 'none'
+  blocked?: true
+}
 
 /**
  * A login or logout of model provider `provider` completed through Ultimate; react to it to drop what you knew about

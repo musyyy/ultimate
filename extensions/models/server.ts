@@ -26,6 +26,7 @@ import {
 import type { SaveFamilies } from './refs.ts'
 import { familiesView, saveFamilies } from './families.ts'
 import { fallback } from './fallback.ts'
+import { hostBlockedProviders } from './scope.ts'
 
 /** A Pi type as a document holds it: plain JSON, arrays mutable. */
 type Json<T> = T extends readonly (infer U)[]
@@ -226,8 +227,35 @@ export const actions = {
   }),
 }
 
-export default function models(host: ExtensionHost) {
+export default async function models(host: ExtensionHost) {
   const live = liveFlows(host)
+  const blocked = await hostBlockedProviders(host)
+  // Shared across reloads: a reload installs the new facet before the old one closes, so the last facet unregisters,
+  // and a load drops the overlays of providers its settings no longer block.
+  const scope = host.resource('models.scope', () => ({
+    facets: new Set<symbol>(),
+    overlaid: new Set<string>(),
+  }))
+  const facet = Symbol('models')
+  scope.facets.add(facet)
+  host.onClose(async () => {
+    scope.facets.delete(facet)
+    if (scope.facets.size) return
+    for (const provider of scope.overlaid) host.modelRuntime.unregisterProvider(provider)
+    scope.overlaid.clear()
+  })
+  for (const provider of scope.overlaid)
+    if (!blocked.has(provider)) {
+      host.modelRuntime.unregisterProvider(provider)
+      scope.overlaid.delete(provider)
+    }
+  for (const provider of blocked)
+    if (!host.modelRuntime.getProvider(provider))
+      host.notice(`settings.json providers: unknown provider ${provider}`)
+    else if (!scope.overlaid.has(provider)) {
+      host.modelRuntime.registerProvider(provider, { models: [] })
+      scope.overlaid.add(provider)
+    }
   // Each facet registers its own, so it reads Logins with this load's token: flows no live login drives (those of a
   // previous process) are marked cancelled.
   host.onOpen(async () => {
@@ -260,7 +288,8 @@ export default function models(host: ExtensionHost) {
       hook(GenerationTask, {
         // Pi upstream: @earendil-works/pi-durable@1.5.0 — patched transactional beforeInput hook. Every run's first
         // input is placed through it (a typed input, a delivery, a queued follow-up), before the run reads its agent.
-        beforeInput: (_input, { tx, conversationId }) => fallback(host, tx, conversationId),
+        beforeInput: (_input, { tx, conversationId }) =>
+          fallback(host, tx, conversationId, blocked),
       }),
     ],
   })

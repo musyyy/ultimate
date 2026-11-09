@@ -26,6 +26,7 @@ import { AgentDoc, LiveDoc } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { Access } from './request-security.ts'
 import { EventFeed, eventLog } from './events.ts'
+import { contractOutline } from '../lib/api-files.ts'
 import type { EventHost } from './events.ts'
 import { extensionApis } from './extension-apis.ts'
 import type { TraceReader } from './trace.ts'
@@ -113,6 +114,8 @@ export async function loadExtensions(
   runtime: Pick<ExtensionHost, 'harness' | 'system' | 'conversations' | 'access'>,
   watch: Watch,
   notice: (message: string) => void = () => {},
+  /** Bring the web bundle up to date with the settings just applied. */
+  rebuildWeb: () => Promise<void> = async () => {},
 ) {
   const trace = host.callTrace
   const log = eventLog(runtime.harness, trace.run, trace.keep)
@@ -395,6 +398,7 @@ export async function loadExtensions(
           enabled: records.get(entry.name)?.path === entry.path && records.get(entry.name)!.enabled,
           layer: available.settings.layers.get(entry.name) ?? 'folder',
           actions: [],
+          events: [],
           facets: {
             server: entry.files.includes('server.ts'),
             web: entry.files.includes('web.tsx'),
@@ -416,16 +420,7 @@ export async function loadExtensions(
       // The caller gets the failure; the chain recovers so later reloads still run.
       chain = work.catch(() => changed())
       await work
-      for (const id of [
-        '\0virtual:ultimate/web-facets',
-        join(host.ultimateRoot, 'web/src/index.css'),
-      ]) {
-        const module = vite.moduleGraph.getModuleById(id)
-        if (module) {
-          vite.moduleGraph.invalidateModule(module)
-          await vite.reloadModule(module)
-        }
-      }
+      await rebuildWeb()
     },
     doc: findDoc,
     metadata: Metadata,
@@ -532,6 +527,7 @@ export async function loadExtensions(
         ...(core ? { core } : {}),
         layer,
         actions: Object.keys(actions.get(name) ?? {}),
+        events: (await contractOutline({ name, path, enabled })).events,
         readme,
         facets: { server: files.includes('server.ts'), web: files.includes('web.tsx') },
         ...(previous?.server ? { server: previous.server } : {}),

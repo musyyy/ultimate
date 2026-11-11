@@ -26,6 +26,14 @@ import { setAutomaticSummaries } from '../../../conversations/summary.ts'
 import { setStanding } from '../../../conversations/server.ts'
 import { apis, attach, post, temp, removeTemp, until } from '../../../../test/helpers.ts'
 import { scriptedModel } from '../../../../test/e2e/scripted-model.ts'
+import { spawnGroup } from '../../../../lib/process-group.ts'
+
+// Pass-through, so a test can read the environment a preview was started with: /proc/<pid>/environ exists only on
+// Linux, and macOS hides other processes' environments.
+vi.mock('../../../../lib/process-group.ts', async (original) => {
+  const module = await original<typeof import('../../../../lib/process-group.ts')>()
+  return { ...module, spawnGroup: vi.fn<typeof module.spawnGroup>(module.spawnGroup) }
+})
 
 type Preview = { id: string; url: string; home: string; pid: number }
 async function assertProject(
@@ -329,8 +337,9 @@ it('starts a preview on the model given to start, over the instance.model settin
     const main = await f.main()
     const preview = JSON.parse(await f.run({ action: 'start', model: null }, main.id)) as Preview
     // The preview's own environment: no ULTIMATE_MODEL, so its agents run their configured models.
-    const environ = await readFile(`/proc/${preview.pid}/environ`, 'utf8')
-    expect(environ.split('\0').filter((line) => line.startsWith('ULTIMATE_MODEL='))).toEqual([])
+    const env = vi.mocked(spawnGroup).mock.lastCall?.[2].env
+    expect(env?.ULTIMATE_HOME).toBe(preview.home)
+    expect(env).not.toHaveProperty('ULTIMATE_MODEL')
     await f.run({ action: 'stop', id: preview.id })
   } finally {
     await f.close()

@@ -35,9 +35,9 @@ report.**
   reply-enabled message), it goes as a one-way message with `report: true`, which wakes the starter; otherwise as a
   note, since the branch will run again. A landing concludes the branch and wakes the starter itself, asking through
   the `workspaces.branches` point this extension provides (`starter`, `underway`).
-- **Answers back down.** When every input of the primary agent's run was a branch's reply or report, its final answer
-  goes to each of those branches (not concluded, not messaged in the run) with `routed: true`, so a weigh-in reaches the
-  branch. User input, notes and landing cards route nothing.
+- **Answers back down.** The primary agent's final answer goes to each branch whose reply or report was an input of
+  that run (not concluded, not messaged in the run) with `routed: true`, so a weigh-in reaches the branch. The run's
+  other inputs (the user's, another Ultimate's, a card) neither receive it nor keep it from a branch.
 - **Results to the asker.** A branch started while its starter owed an agent an answer records it as `serves`; once the
   branch is concluded, the starter's final answer goes to that agent instead, another project's Ultimate included.
 - **Everything else wakes:** reply-enabled messages and one-way messages from anyone who is not the recipient's child or
@@ -50,7 +50,8 @@ message to @ultimate open; @ultimate messaging or concluding it clears that.
 ### Messages to the user
 
 A message to `user` shows in the sender's transcript and starts no run. For @ultimate it is its answer: the run ends
-without restating it, unless a reply-enabled message it has read is still open. While a user's message it has read is
+without restating it, unless a reply-enabled message it has read is still open or a branch whose reply or report the
+run read still waits for its answer: the run goes on to its final answer, which routing sends there. While a user's message it has read is
 open, @ultimate's message to the user answers it and, with `questions`, stays open itself, so it can ask one card after
 another.
 

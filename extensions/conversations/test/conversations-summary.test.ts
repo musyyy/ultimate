@@ -1,3 +1,4 @@
+import type { ConversationId, EntryId, TaskId, ToolRegistration } from '@earendil-works/pi-durable'
 // First: helpers mocks the faux provider's token pacing, which must apply before the server modules load.
 import {
   fauxServer,
@@ -13,7 +14,6 @@ import { Subagents } from '../../subagents/api.ts'
 import { join } from 'node:path'
 import { obj } from '@earendil-works/pi-schema'
 import type { Models, JsonObject } from '@earendil-works/pi-ai'
-import type { ConversationId, EntryId, TaskId, ToolRegistration } from '@earendil-works/pi-durable'
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import {
@@ -237,7 +237,9 @@ async function launch(subagents = false, initialIntent = false, root = false, br
                   ? ({
                       rootOf: async (id: number) => (root ? id : undefined),
                       branchOf: async () =>
-                        branch ? { root: 1, intent: 'Improve the sidebar' } : undefined,
+                        branch
+                          ? { root: 1 as ConversationId, intent: 'Improve the sidebar' }
+                          : undefined,
                       abstract,
                     } satisfies TreesService)
                   : undefined) as NonNullable<SummaryHost['want']>,
@@ -304,12 +306,8 @@ async function launch(subagents = false, initialIntent = false, root = false, br
       servers.splice(servers.indexOf(server), 1)
       const prepared = await prepareFauxServer(options)
       install(prepared.host.registry)
-      server = { ...prepared, ...(await prepared.go()) }
-      const close = server.close.bind(server)
-      server.close = async () => {
-        await server.vite.watcher.close()
-        await close()
-      }
+      // go() returns the opened harness, whose close() would replace the server's and leave Vite running.
+      server = { ...prepared, ...(await prepared.go()), close: () => prepared.close() }
       servers.push(server)
     },
   }

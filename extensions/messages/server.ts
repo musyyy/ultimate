@@ -1,3 +1,11 @@
+import { parseEntryId, parseConversationId } from '../../lib/ids.ts'
+import type {
+  ConversationId,
+  GenerationResult,
+  TaskId,
+  Tx,
+  EntryId,
+} from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { bool, obj, opt, str } from '@earendil-works/pi-schema'
 import {
@@ -9,7 +17,6 @@ import {
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, GenerationResult, TaskId, Tx } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Branches, WorkspacesApi } from '../workspaces/api.ts'
@@ -24,15 +31,16 @@ import { implementAction } from '../../lib/actions.ts'
 import { isOwed } from '../../lib/message-state.ts'
 import { actingAs } from '../../lib/acting-as.ts'
 import { imagesParameter, SCAN_PAGE } from './images.ts'
-import { parentOf, Started, starterOf } from './addresses.ts'
+import { owedRequest, parentOf, Started, starterOf } from './addresses.ts'
 import { delivery } from './delivery.ts'
 import { notice } from './notice.ts'
-import { send } from './send.ts'
+import { receiptOf, send } from './send.ts'
 import type { Device } from '../../shared/events.ts'
 import type { Context } from '@earendil-works/chord/context'
 import { reported, route, working } from './route.ts'
 import { projectsSection, remoteAction, remoteReplyAction, tell } from './remote.ts'
 import { branchTool } from './branch.ts'
+import { safeToRerun } from '../../lib/replay.ts'
 export { gist, openQuestionsNote } from './questions.ts'
 export const docs = [Messages]
 
@@ -48,8 +56,16 @@ async function answer(
   messageId: number,
   text: string,
   ctx: Context,
-  options: { device?: Device; via?: { via: Via; primary: number } } = {},
+  options: {
+    device?: Device
+    via?: { via: Via; primary: number }
+    call?: { taskId: TaskId; callId: string }
+  } = {},
 ) {
+  if (options.call) {
+    const id = await receiptOf(host, options.call, ctx)
+    if (id !== undefined) return id
+  }
   const message = await openMessage(host, messageId, ctx)
   // @ultimate settling its own question has the answer already: a one-way note, not another turn.
   const own = options.via !== undefined && message.from === options.via.primary
@@ -60,6 +76,7 @@ async function answer(
     ctx,
     {
       answerId: messageId,
+      ...options.call,
       ...(own ? { note: true } : {}),
       device: options.device,
       ...(options.via ? { via: options.via.via } : {}),
@@ -71,10 +88,19 @@ async function dismiss(
   host: ExtensionHost,
   messageId: number,
   ctx: Context,
-  options: { device?: Device; via?: Via; reason?: string } = {},
+  options: {
+    device?: Device
+    via?: Via
+    reason?: string
+    call?: { taskId: TaskId; callId: string }
+  } = {},
 ) {
+  if (options.call) {
+    const id = await receiptOf(host, options.call, ctx)
+    if (id !== undefined) return id
+  }
   const message = await openMessage(host, messageId, ctx)
-  const { reason, ...rest } = options
+  const { reason, call, ...rest } = options
   // A one-way note: the asker reads it with its next input, and no run starts for it.
   return send(
     host,
@@ -89,13 +115,13 @@ async function dismiss(
       dismiss: true,
     },
     ctx,
-    { answerId: messageId, note: true, ...rest },
+    { answerId: messageId, note: true, ...call, ...rest },
   )
 }
 /** The user's own input that started `id`'s current run, which a settlement names as its source. */
 async function runInput(host: ExtensionHost, id: ConversationId, ctx: Context) {
   const run = (await host.harness().snapshot(LiveDoc, id, ctx))?.run
-  let found: number | undefined
+  let found: EntryId | undefined
   for (const submission of run?.inputs ?? []) {
     const record = await (await host.harness().submission(submission, ctx))?.status(ctx)
     if (record?.type !== 'input' || record.entry === undefined) continue
@@ -117,7 +143,7 @@ export const actions = {
       let cursor: Parameters<Tx['scanEntries']>[2]
       do {
         const page = await tx.scanEntries(
-          { conversationId: conversation as ConversationId },
+          { conversationId: parseConversationId(Number(conversation)) },
           SCAN_PAGE,
           cursor,
         )
@@ -140,10 +166,10 @@ export const actions = {
     if (
       conversationId === undefined ||
       primary === undefined ||
-      (await actingAs(host, conversationId as ConversationId, ctx)) !== primary
+      (await actingAs(host, conversationId, ctx)) !== primary
     )
       throw new Error("Only @ultimate settles the user's questions")
-    const entry = await runInput(host, conversationId as ConversationId, ctx)
+    const entry = await runInput(host, conversationId, ctx)
     const via = { conversation: conversationId, ...(entry === undefined ? {} : { entry }) }
     return {
       id: closing
@@ -183,7 +209,8 @@ export default function messages(host: ExtensionHost) {
     working: (tx, id) => working(tx, id),
   })
   host.implement(MessagesApi, {
-    answer: (messageId, text, ctx, device) => answer(host, messageId, text, ctx, { device }),
+    answer: (messageId, text, ctx, device, call) =>
+      answer(host, messageId, text, ctx, { device, call }),
     openQuestions: async (ctx) =>
       (
         (await host.harness().snapshot(Messages, ROOT_CONVERSATION_ID, ctx))?.messages ?? []
@@ -192,9 +219,10 @@ export default function messages(host: ExtensionHost) {
           ? [{ message: m.id, conversation: m.from, at: m.at, text: gist(m) }]
           : [],
       ),
-    dismiss: (messageId, ctx, device) => dismiss(host, messageId, ctx, { device }),
+    dismiss: (messageId, ctx, device, call) => dismiss(host, messageId, ctx, { device, call }),
     send: (from, input, requestId, ctx) => send(host, from, input, ctx, { requestId }),
     tell: (from, input, ctx, signal) => tell(host, from, input, ctx, signal),
+    owed: owedRequest,
   })
   return defineExtension({
     name: 'messages',
@@ -271,8 +299,9 @@ export default function messages(host: ExtensionHost) {
           images: opt(imagesParameter),
           questions: opt(questionsParameter),
         }),
-        // The task-scoped receipt deduplicates admission; the memo returns the same id on replay.
-        replay: 'safe',
+        ...safeToRerun(
+          'The task-scoped receipt deduplicates admission; the memo returns the same id on replay.',
+        ),
         async execute(input, api, ctx) {
           // A temporary copy cannot use main's privilege to message the user.
           const from =
@@ -281,10 +310,21 @@ export default function messages(host: ExtensionHost) {
             (await api.memo<number>('message-id', ctx)) ??
             (await api.memo(
               'message-id',
-              await send(host, from, { ...input, imagesFrom: api.conversationId }, ctx, {
-                taskId: api.taskId,
-                callId: api.callId,
-              }),
+              await send(
+                host,
+                from,
+                {
+                  ...input,
+                  images:
+                    typeof input.images === 'number' ? parseEntryId(input.images) : input.images,
+                  imagesFrom: api.conversationId,
+                },
+                ctx,
+                {
+                  taskId: api.taskId,
+                  callId: api.callId,
+                },
+              ),
               ctx,
             ))
           const sent = (await host
@@ -321,7 +361,8 @@ export default function messages(host: ExtensionHost) {
           // The message is @ultimate's answer: the run ends here instead of restating it, unless a reply it has read
           // is owed. One still queued gets its own turn. Pi ends the run only when every call of the tool round
           // terminates, and codemode's nested calls never end it. Nor does it end while a branch whose reply or report
-          // this run read awaits its answer: the final answer goes there (#570368).
+          // this run read awaits its answer, or an agent whose request a concluded branch or a fired automation served:
+          // the final answer goes there (#570368).
           const inputs =
             (await host.harness().snapshot(LiveDoc, api.conversationId, ctx))?.run?.inputs ?? []
           const read = (
@@ -335,7 +376,10 @@ export default function messages(host: ExtensionHost) {
               async (tx) =>
                 (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.some(
                   (m) => m.to === api.conversationId && isOwed(m),
-                ) || (await reported(host, tx, api.conversationId, read)).branches.length > 0,
+                ) ||
+                (({ branches, askers }) => branches.length + askers.length > 0)(
+                  await reported(host, tx, api.conversationId, read),
+                ),
               ctx,
             )
           return {

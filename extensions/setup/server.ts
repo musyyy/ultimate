@@ -1,3 +1,9 @@
+import type {
+  ConversationDocToken,
+  ConversationId,
+  JsonObject,
+  Tx,
+} from '@earendil-works/pi-durable'
 import {
   defineDoc,
   defineExtension,
@@ -5,18 +11,13 @@ import {
   hook,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type {
-  ConversationDocToken,
-  ConversationId,
-  JsonObject,
-  Tx,
-} from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { discoverAgents } from '../../lib/agents.ts'
 import { isolatable } from '../../lib/git.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { meansNone } from '../../lib/errors.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { readSecret, secretMetadata } from '../../lib/secrets.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -58,6 +59,10 @@ type CheckHost = Pick<
 
 const configured = (host: Pick<CheckHost, 'modelRuntime'>, provider: string) =>
   host.modelRuntime.getProviderAuthStatus(provider).configured
+
+/** Whether `provider` holds an API key that stands in for a secret naming it; an OAuth login is no API key. */
+const providerKey = (host: Pick<CheckHost, 'modelRuntime'>, provider: string) =>
+  configured(host, provider) && !host.modelRuntime.isUsingOAuth(provider)
 
 /** Whether any model has a login here. Without one nothing runs, so that is the only model-related warning. */
 const loggedIn = (host: Pick<CheckHost, 'modelRuntime'>) =>
@@ -166,16 +171,21 @@ async function providersArea(host: CheckHost): Promise<SetupIssue | undefined> {
   const providers = await host.want(HealthApi)?.providers()
   if (!providers?.length) return undefined
   const failing = providers.filter((provider) => provider.state === 'failing')
-  if (failing.length)
+  if (failing.length) {
+    // A credit limit is not a login problem: logging in again does not fix it.
+    const billing = failing.every((provider) => provider.cause === 'billing')
     return {
       area: 'Providers',
       status: 'warn',
       summary: failing
         .map((provider) => `${provider.provider} ✗ ${provider.error ?? 'failed'}`)
         .join(' · '),
-      impact: 'Its login was refused, or its calls kept failing on this machine.',
-      fix: { label: 'Log in again', command: 'auth.login' },
+      impact: billing
+        ? 'It refused calls for payment: the account hit a credit or spending limit. Add credits or raise the limit with the provider.'
+        : 'Its login was refused, or its calls kept failing on this machine.',
+      ...(billing ? {} : { fix: { label: 'Log in again', command: 'auth.login' } }),
     }
+  }
   return {
     area: 'Providers',
     status: 'ok',
@@ -196,7 +206,7 @@ async function secretsArea(host: CheckHost): Promise<SetupIssue[]> {
     if (!extension.enabled || !extension.server || extension.server.error) continue
     const missing = extension.layer === 'default' ? optional : chosen
     for (const { name, provider } of extension.server.secrets ?? [])
-      if (!set.has(name) && !(provider && configured(host, provider)))
+      if (!set.has(name) && !(provider && providerKey(host, provider)))
         missing.set(name, [...(missing.get(name) ?? []), extension.name])
   }
   for (const name of chosen.keys()) optional.delete(name)
@@ -344,13 +354,9 @@ async function memoryArea(host: CheckHost, read: ReadDoc): Promise<SetupIssue | 
     | undefined
   const empty: number[] = []
   for (const root of listed?.roots ?? []) {
-    const tally = (await read(tallyDoc, root as ConversationId)) as
-      | (typeof TallyDoc)['value']
-      | undefined
+    const tally = (await read(tallyDoc, root)) as (typeof TallyDoc)['value'] | undefined
     if (tally?.since === undefined) continue
-    const doc = (await read(memoryDoc, root as ConversationId)) as
-      | (typeof MemoryDoc)['value']
-      | undefined
+    const doc = (await read(memoryDoc, root)) as (typeof MemoryDoc)['value'] | undefined
     if (!Object.keys(doc?.memories ?? {}).length) empty.push(root)
   }
   if (!empty.length) return undefined
@@ -468,8 +474,7 @@ export default function setup(host: ExtensionHost) {
         beforeInput: async (_input, { tx, conversationId }) => {
           const standing = await tx.doc(Standing, ROOT_CONVERSATION_ID)
           if (standing.ultimate !== conversationId) return undefined
-          // A check that fails here only skips the note; the status line still shows the setup.
-          return noteFor(tx, conversationId, await current(tx).catch(() => undefined), Date.now())
+          return noteFor(tx, conversationId, await current(tx).catch(meansNone), Date.now())
         },
       }),
     ],

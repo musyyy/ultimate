@@ -1,3 +1,4 @@
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { ChevronDownIcon, CornerDownLeftIcon } from 'lucide-react'
 import { Fragment, useState } from 'react'
 import {
@@ -16,19 +17,23 @@ import type { ReviewRange } from './refs.ts'
 /** A spec as a short label: shas cut to seven characters. */
 export const shortSpec = (spec: string) => spec.replace(/\b([0-9a-f]{7})[0-9a-f]{33}\b/g, '$1')
 
-/** The spec on screen as a button; it opens the recent choices to filter, or takes any spec typed in. */
+/** The spec on screen as a button; it opens the recent choices of `conversation`'s checkout, or takes any spec typed in. */
 export function Selector({
   spec,
   title,
+  conversation,
   onChange,
 }: {
   spec: string
   title?: string
+  conversation?: ConversationId
   onChange: (spec: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const ranges = useAction(RangesAction, null, { enabled: open })
+  const ranges = useAction(RangesAction, conversation === undefined ? null : { conversation }, {
+    enabled: open,
+  })
   const list = ranges.data ?? []
   const needle = query.trim().toLowerCase()
   const shown = needle

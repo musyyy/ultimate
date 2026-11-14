@@ -7,7 +7,15 @@ import {
   PaperclipIcon,
   XIcon,
 } from 'lucide-react'
-import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import { ImagePreviews, useImagePaste } from '@/components/image-paste'
 import type { DraftFile } from '@/components/image-paste'
 import type { KeyboardEvent, ReactNode } from 'react'
@@ -35,9 +43,9 @@ import { touchKeyboard, useViewport } from '../sdk/viewport.ts'
 import { createPortal } from 'react-dom'
 import { useStatusTarget } from './status-target.ts'
 import { imageMimeTypes, type ModelsResponse } from '../../../shared/protocol.ts'
-import { ExtensionBoundary, Provided, Slot } from './boundary.tsx'
+import { AllProvided, ExtensionBoundary, Provided, Slot } from './boundary.tsx'
 import { composerRenderers, inboxRenderer } from '../sdk/registry.ts'
-import { FileUpload } from '../sdk/types.ts'
+import { ComposerPlaceholder, FileUpload } from '../sdk/types.ts'
 import { column } from './layout.ts'
 import { splitAttachments, withAttachments } from './attachments.ts'
 import { storeFiles, storedFiles, storeImages, storedImages } from './draft-images.ts'
@@ -282,19 +290,47 @@ function UploadBridge({ value, set }: { value: Upload; set: (value: Upload) => v
   return null
 }
 
+/** Hands the provided placeholder to the editor beside it, before paint: a provider reloading never remounts the editor. */
+function PlaceholderBridge({
+  values,
+  set,
+}: {
+  values: readonly (string | undefined)[]
+  set: (value: string | undefined) => void
+}) {
+  const value = values.findLast((candidate) => candidate !== undefined)
+  useLayoutEffect(() => set(value), [value, set])
+  return null
+}
+
 function ConversationComposer({ dock }: { dock?: boolean }) {
+  const { id, busy } = useConversation()
   const [upload, setUpload] = useState<Upload>()
+  const [placeholder, setPlaceholder] = useState<string>()
   return (
     <>
       <Provided input={null} point={FileUpload}>
         {(value) => <UploadBridge set={setUpload} value={value} />}
       </Provided>
-      <ComposerEditor dock={dock} upload={upload} />
+      {id !== undefined && (
+        <AllProvided input={{ conversation: id, busy }} point={ComposerPlaceholder}>
+          {(values) => <PlaceholderBridge set={setPlaceholder} values={values} />}
+        </AllProvided>
+      )}
+      <ComposerEditor dock={dock} placeholder={placeholder} upload={upload} />
     </>
   )
 }
 
-function ComposerEditor({ dock, upload }: { dock?: boolean; upload: Upload }) {
+function ComposerEditor({
+  dock,
+  placeholder,
+  upload,
+}: {
+  dock?: boolean
+  placeholder: string | undefined
+  upload: Upload
+}) {
   const { id, agent, busy, loading, inbox } = useConversation()
   const queued = inbox.filter((item) => item.mode !== 'write')
   const scoped = useContext(ConversationIdContext)
@@ -340,7 +376,6 @@ function ComposerEditor({ dock, upload }: { dock?: boolean; upload: Upload }) {
       const on = event.target instanceof Element ? event.target : null
       // Every composer's editor takes its own drops, a side chat's too.
       if (!carriesFiles(event) || on?.closest('[data-ui="composer"] textarea')) return
-      // oxlint-disable-next-line typescript/no-floating-promises -- drop reports failures in the draft's error state.
       void dropRef.current(event)
     }
     document.addEventListener('dragenter', enter)
@@ -448,7 +483,6 @@ function ComposerEditor({ dock, upload }: { dock?: boolean; upload: Upload }) {
       const { value, selectionStart } = event.currentTarget
       if (!atFirstLine(value, selectionStart)) return
       event.preventDefault()
-      // oxlint-disable-next-line typescript/no-floating-promises -- recall catches failures and displays them in the draft's error state.
       void recall()
       return
     }
@@ -457,7 +491,6 @@ function ComposerEditor({ dock, upload }: { dock?: boolean; upload: Upload }) {
     // hardware keyboard's Cmd/Ctrl+Enter (iPad with Magic Keyboard), sends.
     if (touchKeyboard() && !event.metaKey && !event.ctrlKey) return
     event.preventDefault()
-    // oxlint-disable-next-line typescript/no-floating-promises -- send catches submission failures and displays them in the draft's error state.
     void send(event.altKey ? 'followUp' : 'steer')
   }
 
@@ -473,7 +506,6 @@ function ComposerEditor({ dock, upload }: { dock?: boolean; upload: Upload }) {
         className={cn(dragging && 'ring-2 ring-brand/60')}
         onSubmit={(event) => {
           event.preventDefault()
-          // oxlint-disable-next-line typescript/no-floating-promises -- send catches submission failures and displays them in the draft's error state.
           void send()
         }}
       >
@@ -500,6 +532,7 @@ function ComposerEditor({ dock, upload }: { dock?: boolean; upload: Upload }) {
           onKeyDown={onKeyDown}
           placeholder={
             target?.placeholder ??
+            placeholder ??
             (busy ? 'Steer the run, or queue a follow-up…' : 'Ask Ultimate to change something…')
           }
           value={text}
@@ -546,7 +579,6 @@ function ComposerEditor({ dock, upload }: { dock?: boolean; upload: Upload }) {
                 onChange={(event) => {
                   const picked = Array.from(event.target.files ?? [])
                   event.target.value = ''
-                  // oxlint-disable-next-line typescript/no-floating-promises -- attach reports failures in the draft's error state.
                   void attach(picked)
                 }}
                 type="file"

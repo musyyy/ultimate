@@ -1,3 +1,4 @@
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
 import {
   ArrowUpRightIcon,
@@ -12,7 +13,8 @@ import { MentionText } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
 import { api, definePoint, Fold, Provided, useConversationSummary, useUltimate } from '@/sdk'
 import { FeatureTag, useStandingName } from '../conversations/ui.tsx'
-import { GithubAction } from './refs.ts'
+import { GithubAction, RepoAction } from './refs.ts'
+import type { GithubRepo } from './refs.ts'
 import type { ConversationSubject } from '../conversations/types.ts'
 
 /** "open #id", with a dot while that conversation works. */
@@ -22,7 +24,7 @@ export function Open({
   label,
   entry,
 }: {
-  id: number
+  id: ConversationId
   className?: string
   label?: string
   entry?: number
@@ -58,13 +60,30 @@ export function useGithubRepo() {
       () => null,
     )
     let live = true
-    // oxlint-disable-next-line typescript/no-floating-promises -- repo converts action failures to null; the callback only updates state.
     void repo.then((value) => live && setUrl(value))
     return () => {
       live = false
     }
   }, [])
   return url
+}
+
+let project: Promise<GithubRepo | null> | undefined
+/** The project's GitHub repository with its visibility, or null off GitHub; asked once per page. */
+export function useProjectRepo() {
+  const [value, setValue] = useState<GithubRepo | null>()
+  useEffect(() => {
+    project ??= api.action(RepoAction).catch(
+      // No repository: the sidebar's project header names no remote.
+      () => null,
+    )
+    let live = true
+    void project.then((found) => live && setValue(found))
+    return () => {
+      live = false
+    }
+  }, [])
+  return value
 }
 
 /**
@@ -138,7 +157,7 @@ export function CommitCount({
  * What a submission lands as the feature its conversation had at submit time; a standing agent is only ever its
  * `@name`, whatever branch work it last submitted.
  */
-function useSubject(from: number, subject?: ConversationSubject) {
+function useSubject(from: ConversationId, subject?: ConversationSubject) {
   const agent = useStandingName(from)
   return agent ? { title: agent } : subject
 }
@@ -150,7 +169,7 @@ export function Subject({
   className,
 }: {
   subject?: ConversationSubject
-  from: number
+  from: ConversationId
   className?: string
 }) {
   const { switchConversation } = useUltimate()
@@ -201,7 +220,7 @@ export function LandingCard({
   headline: ReactNode
   subject?: ConversationSubject
   /** The submitting conversation. */
-  from: number
+  from: ConversationId
   /** The landed commit, for the folded line. */
   sha?: string
   at?: ReactNode

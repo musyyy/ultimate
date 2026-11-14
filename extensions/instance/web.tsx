@@ -14,6 +14,7 @@ import {
 import {
   cn,
   defineWebExtension,
+  keepLast,
   ProjectChip,
   shortenPath,
   useAction,
@@ -197,8 +198,7 @@ const useMenuOpen = () => useSyncExternalStore(subscribe, () => menuOpen)
 /** Asks for the previews every 5 s, for the switcher and preview links; showing one that stopped returns. */
 function Poll() {
   const { data, refetch: again } = useAction(ListAction, null, {
-    // A failed poll leaves the last list; the next one tries again.
-    onError: () => {},
+    onError: keepLast,
     every: 5000,
   })
   useEffect(() => {
@@ -217,13 +217,11 @@ function Poll() {
 /** Asks for this machine's projects every 15 s and when the switcher opens. */
 function PollProjects() {
   const { data, refetch: again } = useAction(ProjectsAction, null, {
-    // A failed poll leaves the last list; the next one tries again.
-    onError: () => {},
+    onError: keepLast,
+    every: 15000,
   })
   useEffect(() => {
     refetchProjects = () => void again()
-    const timer = setInterval(refetchProjects, 15000)
-    return () => clearInterval(timer)
   }, [again])
   useEffect(() => {
     if (!data) return
@@ -448,7 +446,6 @@ function Embedded() {
   const { preview, url } = current
   return (
     <div className="fixed inset-x-0 top-9 bottom-0 z-40 bg-background">
-      {/* oxlint-disable-next-line react/iframe-missing-sandbox -- a whole Ultimate on its own origin, trusted as in its own tab */}
       <iframe
         allow="clipboard-read; clipboard-write"
         className="size-full border-0"

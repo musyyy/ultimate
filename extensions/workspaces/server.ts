@@ -1,3 +1,4 @@
+import { parseConversationId } from '../../lib/ids.ts'
 import type { JsonValue } from '@earendil-works/chord/json'
 import { onCommit } from '../../lib/commits.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
@@ -13,7 +14,6 @@ import {
   section,
   ToolTask,
 } from '@earendil-works/pi-durable'
-import type { ConversationId } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import { hostDefault } from '../../lib/agents.ts'
 import type { ActionInput } from '../../lib/actions.ts'
@@ -29,14 +29,25 @@ import {
   IsolationAction,
   PendingAction,
   ProgressAction,
+  RepoAction,
   StatsAction,
 } from './refs.ts'
-import { githubRepo } from '../../lib/project-identity.ts'
+import type { GithubRepo } from './refs.ts'
+import { githubRepo, readGithubRepo } from '../../lib/project-identity.ts'
 import { sweepChecks } from './lander.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
+import { inBackground } from '../../lib/errors.ts'
 export const order = -200
 export const docs = [Workspaces]
 export const userActions = ['setupGit']
+/** Each origin's repository with its visibility, read once per process: it rarely changes and `gh` asks the network. */
+const repos = new Map<string, Promise<GithubRepo>>()
+function readRepo(key: string) {
+  let repo = repos.get(key)
+  if (!repo) repos.set(key, (repo = readGithubRepo(key)))
+  return repo
+}
+
 const finish = (value: unknown) => ({
   output: [{ type: 'text' as const, text: JSON.stringify(value) }],
 })
@@ -44,7 +55,7 @@ function workspaceId(args: ActionInput<{ id: number }>) {
   const id = args && typeof args === 'object' && !Array.isArray(args) ? args.id : undefined
   if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)
     throw new Error('Expected a workspace conversation id')
-  return id as ConversationId
+  return parseConversationId(id)
 }
 async function setupGit(host: ExtensionHost) {
   const checkout = await isolatable(host.projectRoot)
@@ -63,6 +74,11 @@ export const actions = {
     GithubAction,
     async (_args, { host }) => (await githubRepo(host.projectRoot)) ?? null,
   ),
+  /** The project's `origin` on GitHub with its visibility, or null off GitHub: the sidebar's project header. */
+  repo: implementAction(RepoAction, async (_args, { host }) => {
+    const key = await githubRepo(host.projectRoot)
+    return key ? readRepo(key) : null
+  }),
   progress: implementAction(ProgressAction, (args, { host }) => {
     const ids = args && typeof args === 'object' && !Array.isArray(args) ? args.ids : undefined
     if (
@@ -71,7 +87,7 @@ export const actions = {
       ids.some((id) => typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)
     )
       throw new Error('Expected at most 100 conversation ids')
-    return workspaces(host).progress(ids as number[], context)
+    return workspaces(host).progress((ids as number[]).map(parseConversationId), context)
   }),
   pending: implementAction(PendingAction, (args, { host }) => {
     const ids = args && typeof args === 'object' && !Array.isArray(args) ? args.ids : undefined
@@ -80,7 +96,7 @@ export const actions = {
       ids.some((id) => typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)
     )
       throw new Error('Expected workspace conversation ids')
-    return workspaces(host).pending(ids as number[], context)
+    return workspaces(host).pending((ids as number[]).map(parseConversationId), context)
   }),
   async create(args: JsonValue, { host }: ActionContext) {
     const input = (args ?? {}) as { cwd?: string; title?: string }
@@ -184,8 +200,7 @@ export default function workspaceExtension(host: ExtensionHost) {
           host.notice(
             `Lander task ${change.value.id} faulted: ${change.value.state.outcome.error.message}; its queue resumes on the next submit or restart`,
           )
-        // oxlint-disable-next-line typescript/no-floating-promises -- resume catches failures and reports them through host.notice.
-        else void resume()
+        else inBackground(resume())
       }
     })
     await stand()

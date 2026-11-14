@@ -1,6 +1,17 @@
+import type { ConversationId } from '@earendil-works/pi-durable'
+import { ROOT } from '@/sdk'
 import type { ReactNode } from 'react'
 import { useRef, useState } from 'react'
-import { cn, formatAgo, formatTokens, Provided, useAction, useDocOf, useEvents } from '@/sdk'
+import {
+  cn,
+  formatAgo,
+  formatTokens,
+  keepLast,
+  Provided,
+  useAction,
+  useDocOf,
+  useEvents,
+} from '@/sdk'
 import { MEMORY_SURFACE, MemoryDoc, TallyDoc, useOpenMemory } from '../lineage/ui.tsx'
 import { Committed } from '../coding-tools/ui.tsx'
 import { MessagesDoc, conversationState, emptyMessages } from '../messages/ui.tsx'
@@ -53,9 +64,9 @@ function useBranchState(
   parked = false,
 ) {
   const index = useWorkspaceIndex()
-  const log = useDocOf(1, MessagesDoc) ?? emptyMessages
+  const log = useDocOf(ROOT, MessagesDoc) ?? emptyMessages
   const runState = useOverview()[conversation.id]?.runState
-  const primary = useDocOf(1, StandingDoc)?.ultimate
+  const primary = useDocOf(ROOT, StandingDoc)?.ultimate
   const concludedSince = useConcludedSince()(conversation.id)
   const queued = index.queue.find((item) => item.conversationId === conversation.id)
   if (queued?.state === 'landing') return { label: 'landing', tone: 'success' } as const
@@ -190,7 +201,7 @@ function PhasedFlightRow({
           <button
             aria-current={shown ? 'true' : undefined}
             className={cn(
-              'mx-2 flex w-[calc(100%-1rem)] min-w-0 cursor-pointer flex-col gap-0.5 rounded-md py-1 pr-2 pl-2.5 text-left outline-none hover:bg-sidebar-accent/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
+              'mx-2 flex w-[calc(100%-1rem)] min-w-0 cursor-pointer flex-col gap-0.5 rounded-md py-1.5 pr-2 pl-2.5 text-left outline-none hover:bg-sidebar-accent/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
               shown && 'bg-sidebar-accent',
             )}
             data-in-flight={conversation.id}
@@ -237,7 +248,7 @@ function PhasedFlightRow({
         </SummaryHistory>
         {!editing && (
           // Beside the title rather than at the bottom right, where the age is.
-          <div className="absolute top-0.5 right-2 size-5">
+          <div className="absolute top-1 right-2 size-5">
             <RowMenu
               concluded={false}
               conversation={conversation}
@@ -285,7 +296,7 @@ function useFlightWork(branches: ConversationSummary[]) {
   const progress = useAction(
     ProgressAction,
     { ids },
-    { enabled: ids.length > 0, onError: () => {}, on: [commit, runs.ended] },
+    { enabled: ids.length > 0, onError: keepLast, on: [commit, runs.ended] },
   )
   const byId = new Map((progress.data ?? []).map((item) => [item.id, item]))
   return new Map(
@@ -336,7 +347,7 @@ export function InFlight({
   if (!flights.length) return null
   return (
     <Section count={flights.length} id="in-flight" label="In flight">
-      <ul className="flex flex-col gap-px">
+      <ul className="flex flex-col gap-0.5">
         {flights.map((flight) => (
           <FlightRow
             conversation={flight.conversation}
@@ -367,7 +378,7 @@ const kinds = [
  * click opens the Memory surface, and the row shows selected while it does. Its tally, the browsable history behind
  * it, opens from the project header above it. A root without memories yet shows its context's size.
  */
-export function useMemorySummary(id: number) {
+export function useMemorySummary(id: ConversationId) {
   const tally = useDocOf(id, TallyDoc)
   const memories = Object.values(useDocOf(id, MemoryDoc)?.memories ?? {})
   const counts = kinds
@@ -406,7 +417,7 @@ export function MemoryRow({
         aria-current={shown ? 'page' : undefined}
         aria-label={`Project memory of #${id}`}
         className={cn(
-          'mx-2 flex h-11 w-[calc(100%-1rem)] min-w-0 cursor-pointer items-center gap-2.5 rounded-md pr-2 pl-2 text-left outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
+          'mx-2 flex h-12 w-[calc(100%-1rem)] min-w-0 cursor-pointer items-center gap-2.5 rounded-md pr-2 pl-2 text-left outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
           shown && 'bg-sidebar-accent hover:bg-sidebar-accent',
         )}
         onClick={() => openMemory()}

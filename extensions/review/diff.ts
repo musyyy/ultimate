@@ -3,6 +3,7 @@ import { lstat, readlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { exec } from '../../lib/exec.ts'
 import { git } from '../../lib/git.ts'
+import { meansNone } from '../../lib/errors.ts'
 import type { ReviewDiff, ReviewFile, ReviewKind } from './refs.ts'
 
 /** Patches over this many bytes per file are listed without their hunks. */
@@ -50,10 +51,7 @@ const emptyTree = (cwd: string) => git(cwd, 'hash-object', '-t', 'tree', '/dev/n
 async function sides(cwd: string, spec: string, options: Options): Promise<Sides> {
   const { signal } = options
   if (spec === 'uncommitted') {
-    const head = await commit(cwd, 'HEAD', signal).catch(
-      // No commit yet: everything is new against the empty tree.
-      () => undefined,
-    )
+    const head = await commit(cwd, 'HEAD', signal).catch(meansNone)
     return {
       kind: 'uncommitted',
       title: 'Uncommitted changes',
@@ -76,10 +74,7 @@ async function sides(cwd: string, spec: string, options: Options): Promise<Sides
     return { kind: 'range', title: spec, base, head }
   }
   const head = await commit(cwd, plain(spec, spec), signal)
-  const parent = await commit(cwd, `${head}^1`, signal).catch(
-    // A root commit has no parent: it is compared with the empty tree.
-    () => undefined,
-  )
+  const parent = await commit(cwd, `${head}^1`, signal).catch(meansNone)
   const title = await git({ cwd, signal }, 'log', '-1', '--format=%s', head)
   return { kind: 'commit', title, base: parent ?? (await emptyTree(cwd)), head }
 }
@@ -261,7 +256,12 @@ async function untracked(top: string, signal?: AbortSignal) {
 /** The diff `spec` names in the repository holding `cwd`; see `ReviewKind` for the specs. */
 export async function reviewDiff(cwd: string, spec: string, options: Options): Promise<ReviewDiff> {
   if (typeof spec !== 'string' || !spec.trim()) throw new Error('Expected a spec')
-  const top = await git({ cwd, signal: options.signal }, 'rev-parse', '--show-toplevel')
+  const top = await git({ cwd, signal: options.signal }, 'rev-parse', '--show-toplevel').catch(
+    // A project root that is no repository of its own: name the checkout that was read, not Git's stderr.
+    () => {
+      throw new Error(`No Git repository in ${cwd}`)
+    },
+  )
   const side = await sides(top, spec.trim(), options)
   const changes = await tracked(top, side.base, side.head, options.signal)
   if (side.kind === 'uncommitted') {

@@ -25,6 +25,7 @@
     "shared/extension-api.ts",
     "extensions/*/refs.ts",
     "extensions/messages/caller.ts",
+    "extensions/projects/links.ts",
     "extensions/cloud/types.ts",
     "extensions/conversations/types.ts",
     "extensions/dream/stage.ts",
@@ -75,6 +76,9 @@
     "lib/marks.ts",
     "lib/message-state.ts",
     "lib/source-frames.ts",
+    "lib/timers.ts",
+    "lib/errors.ts",
+    "lib/ids.ts",
     "extensions/subagents/message-types.ts",
     "test/web",
     "extensions/*/test/web"

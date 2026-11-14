@@ -18,7 +18,8 @@ import { Subagents } from '../../../subagents/api.ts'
 import workspaceExtension from '../../../workspaces/server.ts'
 import { workspaces } from '../../../workspaces/workspaces.ts'
 import { git } from '../../../../lib/git.ts'
-import { projectSettings } from '../../../../server/project-setup.ts'
+import { exec } from '../../../../lib/exec.ts'
+import { projectSettings } from '../../../../lib/project-setup.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import type { ExtensionHost } from '../../../../server/extensions.ts'
 import type { ConversationsService } from '../../../conversations/api.ts'
@@ -26,14 +27,6 @@ import { setAutomaticSummaries } from '../../../conversations/summary.ts'
 import { setStanding } from '../../../conversations/server.ts'
 import { apis, attach, post, temp, removeTemp, until } from '../../../../test/helpers.ts'
 import { scriptedModel } from '../../../../test/e2e/scripted-model.ts'
-import { spawnGroup } from '../../../../lib/process-group.ts'
-
-// Pass-through, so a test can read the environment a preview was started with: /proc/<pid>/environ exists only on
-// Linux, and macOS hides other processes' environments.
-vi.mock('../../../../lib/process-group.ts', async (original) => {
-  const module = await original<typeof import('../../../../lib/process-group.ts')>()
-  return { ...module, spawnGroup: vi.fn<typeof module.spawnGroup>(module.spawnGroup) }
-})
 
 type Preview = { id: string; url: string; home: string; pid: number }
 async function assertProject(
@@ -336,10 +329,16 @@ it('starts a preview on the model given to start, over the instance.model settin
     )
     const main = await f.main()
     const preview = JSON.parse(await f.run({ action: 'start', model: null }, main.id)) as Preview
-    // The preview's own environment: no ULTIMATE_MODEL, so its agents run their configured models.
-    const env = vi.mocked(spawnGroup).mock.lastCall?.[2].env
-    expect(env?.ULTIMATE_HOME).toBe(preview.home)
-    expect(env).not.toHaveProperty('ULTIMATE_MODEL')
+    // The preview's own environment: no ULTIMATE_MODEL, so its agents run their configured models. macOS has no
+    // /proc; its ps prints a process's environment after the command with -E.
+    const environ =
+      process.platform === 'linux'
+        ? (await readFile(`/proc/${preview.pid}/environ`, 'utf8')).split('\0')
+        : (
+            await exec('ps', ['-E', '-ww', '-o', 'command=', '-p', String(preview.pid)])
+          ).stdout.split(/\s+/)
+    expect(environ).toContain('ULTIMATE_NO_OPEN=1')
+    expect(environ.filter((line) => line.startsWith('ULTIMATE_MODEL='))).toEqual([])
     await f.run({ action: 'stop', id: preview.id })
   } finally {
     await f.close()

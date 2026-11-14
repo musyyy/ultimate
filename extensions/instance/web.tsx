@@ -1,4 +1,4 @@
-import { ChevronRightIcon, ExternalLinkIcon } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon } from 'lucide-react'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
 import { Shimmer } from '@/components/ai/shimmer'
@@ -15,7 +15,6 @@ import {
   cn,
   defineWebExtension,
   keepLast,
-  ProjectChip,
   shortenPath,
   useAction,
   useConversations,
@@ -25,8 +24,8 @@ import {
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import { at, label } from './links.ts'
-import { ListAction, ProjectsAction } from './refs.ts'
-import type { ListedProject, Preview } from './refs.ts'
+import { ListAction } from './refs.ts'
+import type { Preview } from './refs.ts'
 
 interface Instance {
   id: string
@@ -164,12 +163,8 @@ const loopback = isLoopback(location.hostname)
  * a URL of it. A reload returns to this project.
  */
 let previews: Preview[] | undefined
-let projects: ListedProject[] | undefined
 let shown: { preview: Preview; url: string } | undefined
-/** Whether the switcher's menu is open, so the palette's command can open it. */
-let menuOpen = false
 let refetch = () => {}
-let refetchProjects = () => {}
 const listeners = new Set<() => void>()
 const changed = () => {
   for (const listener of listeners) listener()
@@ -182,18 +177,8 @@ function show(preview: Preview | undefined, url = preview?.url) {
   shown = preview && url ? { preview, url } : undefined
   changed()
 }
-function setMenuOpen(open: boolean) {
-  menuOpen = open
-  if (open) {
-    refetch()
-    refetchProjects()
-  }
-  changed()
-}
 const useShown = () => useSyncExternalStore(subscribe, () => shown)
 const usePreviews = () => useSyncExternalStore(subscribe, () => previews)
-const useProjects = () => useSyncExternalStore(subscribe, () => projects)
-const useMenuOpen = () => useSyncExternalStore(subscribe, () => menuOpen)
 
 /** Asks for the previews every 5 s, for the switcher and preview links; showing one that stopped returns. */
 function Poll() {
@@ -209,23 +194,6 @@ function Poll() {
     previews = data
     if (shown && !data.some((preview) => preview.running && preview.id === shown?.preview.id))
       shown = undefined
-    changed()
-  }, [data])
-  return null
-}
-
-/** Asks for this machine's projects every 15 s and when the switcher opens. */
-function PollProjects() {
-  const { data, refetch: again } = useAction(ProjectsAction, null, {
-    onError: keepLast,
-    every: 15000,
-  })
-  useEffect(() => {
-    refetchProjects = () => void again()
-  }, [again])
-  useEffect(() => {
-    if (!data) return
-    projects = data
     changed()
   }, [data])
   return null
@@ -314,100 +282,45 @@ function PreviewLink({
 const port = (url: string) => `:${new URL(url).port}`
 
 /**
- * Where a project opens from this page: its loopback URL here, its tailnet address on a page opened from the tailnet.
- * Undefined when it is not running, or not reachable from here.
- */
-function projectHref(project: ListedProject) {
-  return loopback ? project.url : project.tailnet
-}
-
-/** A project row: a link that opens it in this tab (⌘-click for a new one), or dimmed with why it does not open. */
-function ProjectItem({ project }: { project: ListedProject }) {
-  const href = projectHref(project)
-  const note = !project.url ? 'not running' : !href ? 'only on this machine' : undefined
-  const dot = (
-    <span
-      className={cn(
-        'size-1.5 shrink-0 rounded-full',
-        project.url ? 'bg-success' : 'bg-muted-foreground/40',
-      )}
-    />
-  )
-  if (!href)
-    return (
-      <DropdownMenuItem className="gap-2 py-1.5" data-project={project.name} disabled>
-        {dot}
-        <span className="min-w-0 flex-1 truncate text-[13px]">{project.name}</span>
-        <span className="shrink-0 font-mono text-[11px]">{note}</span>
-      </DropdownMenuItem>
-    )
-  return (
-    <DropdownMenuItem asChild className="gap-2 py-1.5" data-project={project.name}>
-      <a href={href} title={project.root}>
-        {dot}
-        <span className="min-w-0 flex-1 truncate text-[13px]">{project.name}</span>
-        <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-          {port(project.url!)}
-        </span>
-      </a>
-    </DropdownMenuItem>
-  )
-}
-
-/**
- * The title bar's project chip as a switcher: this machine's projects, each opening in this tab, then on loopback the
- * previews `instance` runs, shown below the title bar. A plain chip while there is nothing else to switch to; the lists
- * refresh when the menu opens.
+ * The previews `instance` runs, as a chip after the project chip while any runs: its menu lists "This project" and
+ * each preview, and refreshes when it opens. It leaves the project chip itself to `titlebar.project`.
  */
 function Switcher() {
   const current = useShown()?.preview
-  // Off loopback nothing polls the previews, so there are none.
-  const data = usePreviews()?.filter((preview) => preview.running) ?? []
-  const all = useProjects() ?? []
-  const others = all.filter((project) => !project.current)
-  const own = all.find((project) => project.current)
+  const data = usePreviews()?.filter((preview) => preview.running)
   const conversations = useConversations()
-  const open = useMenuOpen()
-  if (!data.length && !others.length) return <ProjectChip />
+  if (!data?.length) return null
   const title = (preview: Preview) =>
     conversations.find((conversation) => conversation.id === preview.conversationId)?.title
   return (
-    <DropdownMenu modal={false} onOpenChange={setMenuOpen} open={open}>
+    <DropdownMenu modal={false} onOpenChange={(open) => open && refetch()}>
       <DropdownMenuTrigger asChild>
-        <ProjectChip className={cn(current && 'bg-brand/10')} menu>
+        <button
+          className={cn(
+            'flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-accent',
+            current && 'bg-brand/10',
+          )}
+          type="button"
+        >
           {current ? (
-            <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11.5px] text-muted-foreground">
+            <>
               <span className="size-1.5 rounded-full bg-brand" />#{current.conversationId} ·{' '}
               {port(current.url)}
-            </span>
+            </>
           ) : (
-            data.length > 0 && (
-              <span className="shrink-0 font-mono text-[11.5px] text-muted-foreground max-md:hidden">
-                {data.length} {data.length === 1 ? 'preview' : 'previews'}
-              </span>
-            )
+            <span className="max-md:hidden">
+              {data.length} {data.length === 1 ? 'preview' : 'previews'}
+            </span>
           )}
-        </ProjectChip>
+          <ChevronDownIcon className="size-3.5 opacity-60" />
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-80" sideOffset={4}>
-        <DropdownMenuLabel className="px-2 pt-1 pb-1.5 section-label">Projects</DropdownMenuLabel>
+        <DropdownMenuLabel className="px-2 pt-1 pb-1.5 section-label">Instances</DropdownMenuLabel>
         <DropdownMenuItem className="gap-2 py-1.5" onSelect={() => show(undefined)}>
-          <span className="size-1.5 shrink-0 rounded-full bg-brand" />
-          <span className={cn('min-w-0 flex-1 truncate text-[13px]', !current && 'text-brand')}>
-            {own?.name ?? 'This project'}
-          </span>
-          <span className="font-mono text-[11px] text-muted-foreground">
-            {loopback ? port(location.href) : 'this one'}
-          </span>
+          <span className={cn('flex-1 text-[13px]', !current && 'text-brand')}>This project</span>
+          <span className="font-mono text-[11px] text-muted-foreground">{port(location.href)}</span>
         </DropdownMenuItem>
-        {others.map((project) => (
-          <ProjectItem key={project.root} project={project} />
-        ))}
-        {data.length > 0 && (
-          <DropdownMenuLabel className="mt-1 border-t border-border/60 px-2 pt-2 pb-1.5 section-label">
-            Previews
-          </DropdownMenuLabel>
-        )}
         {data.map((preview) => (
           <DropdownMenuItem
             className="gap-2 py-1.5"
@@ -460,17 +373,5 @@ function Embedded() {
 export default defineWebExtension({
   tools: { instance: InstanceCall },
   link: PreviewLink,
-  slots: {
-    'titlebar.project': [Switcher],
-    overlay: loopback ? [Poll, PollProjects, Embedded] : [PollProjects],
-  },
-  commands: [
-    {
-      id: 'instance.switch-project',
-      title: 'Switch project…',
-      group: 'Ultimate',
-      when: () => !!projects?.some((project) => !project.current),
-      run: () => setMenuOpen(true),
-    },
-  ],
+  slots: { 'titlebar.left': loopback ? [Switcher] : [], overlay: [Poll, Embedded] },
 })

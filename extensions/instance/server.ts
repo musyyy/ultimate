@@ -35,9 +35,7 @@ import { spawnGroup, stopGroup } from '../../lib/process-group.ts'
 import { within } from '../../lib/timers.ts'
 import type { Group, GroupProcess } from '../../lib/process-group.ts'
 import { Previews } from '../conversations/api.ts'
-import { ListAction, ProjectsAction } from './refs.ts'
-import type { ListedProject } from './refs.ts'
-import { alive } from '../../lib/lock.ts'
+import { ListAction } from './refs.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { readFamilies } from '../../lib/families-settings.ts'
 import { BUILTIN_FAMILIES, DEFAULT_FAMILY, FEATURES } from '../../lib/families.ts'
@@ -328,54 +326,26 @@ async function stopInstance(instances: Map<string, Instance>, instance: Instance
 }
 
 /**
- * Where the tailnet reaches each server that published itself there: its pid, the folder or home it registered
- * under, and its address. Each server's own `tailscale` extension records its HTTPS port in the user's registry under
- * an owner token that starts with its pid; the host's tailscale status knows the DNS name. Empty while this server is
- * not on the tailnet.
+ * Where the tailnet reaches each preview, by pid. A preview's own `tailscale` extension records its HTTPS port in
+ * the user's registry under an owner token that starts with its pid; the host's tailscale status knows the DNS name.
  */
 async function tailnet(host: Pick<ExtensionHost, 'want' | 'userHome'>) {
   const published = host.want(TailscaleApi)?.status().url
-  if (!published) return []
+  if (!published) return new Map<number, string>()
   let registry: { ports?: Record<string, { port: number; owner: string }> }
   try {
     registry = JSON.parse(await readFile(join(host.userHome, '.ultimate/tailscale.json'), 'utf8'))
   } catch {
-    // Missing or unreadable, the registry names no addresses; the servers themselves still list.
-    return []
+    // Missing or unreadable, the registry names no addresses; the previews themselves still list.
+    return new Map<number, string>()
   }
   const { hostname } = new URL(published)
-  return Object.entries(registry.ports ?? {}).map(([key, { port, owner }]) => ({
-    key,
-    pid: Number(owner.split(':')[0]),
-    url: `https://${hostname}:${port}`,
-  }))
-}
-
-/**
- * The projects on this machine for the title bar's switcher: each one whose folder still exists, its local URL while it
- * runs, and its tailnet address while the server that registered it there still lives.
- */
-export function listProjects(
-  projects: Awaited<ReturnType<ExtensionHost['projects']>>,
-  addresses: Awaited<ReturnType<typeof tailnet>>,
-  exists: (path: string) => boolean = existsSync,
-  isAlive: (pid: number) => boolean = alive,
-): ListedProject[] {
-  return projects
-    .filter((project) => project.root && exists(project.root))
-    .map((project) => {
-      const address = project.running
-        ? addresses.find((item) => item.key === project.root && isAlive(item.pid))?.url
-        : undefined
-      return {
-        name: project.name,
-        root: project.root!,
-        current: project.current,
-        ...(project.running && { url: project.running.url }),
-        ...(address && { tailnet: address }),
-      }
-    })
-    .toSorted((a, b) => a.name.localeCompare(b.name))
+  return new Map(
+    Object.values(registry.ports ?? {}).map(({ port, owner }) => [
+      Number(owner.split(':')[0]),
+      `https://${hostname}:${port}`,
+    ]),
+  )
 }
 
 export const actions: Record<string, ExtensionAction> = {
@@ -384,7 +354,7 @@ export const actions: Record<string, ExtensionAction> = {
    * that failed is not among them.
    */
   list: implementAction(ListAction, async (_args, { host }) => {
-    const addresses = new Map((await tailnet(host)).map((item) => [item.pid, item.url]))
+    const addresses = await tailnet(host)
     return [
       ...[...running(host).values()]
         .filter((item) => item.url && item.conversationId !== undefined)
@@ -398,10 +368,6 @@ export const actions: Record<string, ExtensionAction> = {
         .map((item) => ({ ...item, running: false })),
     ]
   }),
-  /** The projects on this machine, for the title bar's switcher. */
-  projects: implementAction(ProjectsAction, async (_args, { host }) =>
-    listProjects(await host.projects(), await tailnet(host)),
-  ),
 }
 
 /**

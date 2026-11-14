@@ -16,18 +16,3 @@ export type Preview = {
 
 /** No arguments → the previews that served their UI, running or stopped since; a failed start is not among them. */
 export const ListAction = actionRef<null, Preview[]>('instance', 'list')
-
-/** A project on this machine, for the switcher. */
-export type ListedProject = {
-  name: string
-  root: string
-  /** The project this server runs. */
-  current: boolean
-  /** Its loopback URL while it runs. */
-  url?: string
-  /** Where the tailnet reaches it while it runs and publishes itself there. */
-  tailnet?: string
-}
-
-/** No arguments → the projects on this machine whose folders exist, by name. */
-export const ProjectsAction = actionRef<null, ListedProject[]>('instance', 'projects')

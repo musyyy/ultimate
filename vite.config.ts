@@ -23,6 +23,19 @@ export default defineConfig({
     },
     overrides: [
       {
+        files: [
+          'extensions/**',
+          'server/**',
+          'web/**',
+          'lib/**',
+          'shared/**',
+          'bin/**',
+          'scripts/**',
+        ],
+        excludeFiles: ['test/**', 'extensions/*/test/**'],
+        rules: { 'typescript/switch-exhaustiveness-check': 'error' },
+      },
+      {
         files: ['web/public/sw.js'],
         rules: { 'unicorn/require-post-message-target-origin': 'off' },
       },
@@ -70,6 +83,19 @@ export default defineConfig({
         ],
         excludeFiles: ['extensions/*/test/**', '.ultimate/extensions/*/test/**', 'lib/timers.ts'],
         rules: { 'ultimate/no-raw-timer': 'error' },
+      },
+      {
+        files: [
+          'bin/**',
+          'extensions/**',
+          'lib/**',
+          'scripts/**',
+          'server/**',
+          'shared/**',
+          'web/**',
+        ],
+        excludeFiles: ['extensions/*/test/**'],
+        rules: { 'ultimate/no-comments': 'error' },
       },
       {
         files: ['server/**', 'bin/**'],

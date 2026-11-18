@@ -1,6 +1,6 @@
 ## Running the server
 
-- `pnpm install`, then `pnpm start` runs the supervisor on Node 26. It owns the public TCP port and single-instance lock, prints the URL and opens it as a Chrome app window (`http://ultimate.localhost:<port>`, a tab without a Chrome-family browser); `--no-open` or `ULTIMATE_NO_OPEN=1` disables opening.
+- `pnpm install`, then `pnpm start` runs the supervisor on Node 26. It owns the public TCP port and single-instance lock, prints the URL and opens it as a Chrome app window (`http://ultimate.localhost:<port>`, a tab without a Chrome-family browser; on macOS the installed Chrome app of that origin, found by its `CrAppModeShortcutURL` in `~/Applications/Chrome Apps.localized`, when there is one); `--no-open` or `ULTIMATE_NO_OPEN=1` disables opening.
 - Run `pnpm add -g "$PWD"` once in the clone, then `cd ~/Projects/app && ultimate`. `ultimate [dir] [--port N] [--no-open]` starts in that project, or opens a window of it when it already runs; `pnpm start` in the clone uses the clone as the project.
 - Project config belongs in `<project>/.ultimate/`: extensions, agents, skills, and optional `settings.json` (JSON object; `defaultSurface` selects the preferred surface). Discovery is built-in, user `~/.ultimate/`, then project config; later names win. User config is independent of `ULTIMATE_HOME`.
 - Server facets can export `actions`, a map of async `(args, ctx)` functions callable from codemode with `ultimate.action(extension, action, args?)` or from the UI by `POST /api/extensions/:name/actions/:action` with `{ args, conversationId? }`, returning `{ result }`. `ctx` has `host`, optional `conversationId`, `signal`, and `exec(command, args, { cwd?, timeout? })`; exec uses the project cwd, no shell, a 1 MiB output cap and a maximum 30 second timeout.
@@ -28,7 +28,11 @@
 - `tsconfig.swap.json` is the server-only type-check gate for swaps.
 - `tsconfig.json` (server, tests, tooling) references `tsconfig.web.json` (browser: `web/src`, `extensions/**/*.tsx`).
   `pnpm check` type-checks both; with plain `tsc`, run `tsc -b`.
-- The standalone server shuts down on SIGINT/SIGTERM; reopening resumes durable work.
+- The standalone server shuts down on SIGINT/SIGTERM; reopening resumes durable work. A supervised core ignores both
+  and logs a warning: the supervisor stops it over IPC, so such a signal either reached the whole group while the
+  service stops Ultimate, or came from outside (an agent's kill by port or name). Stop Ultimate through the supervisor (`pnpm start`'s process, or its service).
+- Closing a server runs the extensions' release callbacks, then closes the Harness before disposing them, so work running at shutdown stays pending and resumes
+  on the next open instead of faulting on a disposed extension.
 
 ## Starting fresh
 

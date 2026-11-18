@@ -35,8 +35,8 @@ import {
 import type { GithubRepo } from './refs.ts'
 import { githubRepo, readGithubRepo } from '../../lib/project-identity.ts'
 import { sweepChecks } from './lander.ts'
-import { Workspaces, workspaces } from './workspaces.ts'
-import { inBackground } from '../../lib/errors.ts'
+import { landingPending, pendingLandingCards, Workspaces, workspaces } from './workspaces.ts'
+import { rebuiltOnOpen } from '../../lib/errors.ts'
 export const order = -200
 export const docs = [Workspaces]
 export const userActions = ['setupGit']
@@ -142,6 +142,8 @@ export default function workspaceExtension(host: ExtensionHost) {
     ...service,
     git,
     doc: Workspaces,
+    landingPending,
+    pendingLandingCards,
     setupGit: () => setupGit(host),
   })
   host.implement(Release, { release: (ids, caller) => service.release(ids, caller) })
@@ -181,7 +183,7 @@ export default function workspaceExtension(host: ExtensionHost) {
           host.notice(
             `Lander task ${change.value.id} faulted: ${change.value.state.outcome.error.message}; its queue resumes on the next submit or restart`,
           )
-        else inBackground(resume())
+        else rebuiltOnOpen('open resumes every lander queue', resume())
       }
     })
     await stand()

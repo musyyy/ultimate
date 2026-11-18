@@ -13,7 +13,7 @@ import type { Device } from '../../shared/events.ts'
 import { resolveImages } from './images.ts'
 import type { ImagesRef } from './images.ts'
 import { append } from './log.ts'
-import { parentOf, resolveRecipient, senderName, starterOf } from './addresses.ts'
+import { parentOf, resolveRecipient, senderName, serve, starterOf } from './addresses.ts'
 import { delivery } from './delivery.ts'
 import { notice } from './notice.ts'
 
@@ -77,6 +77,7 @@ export async function send(
     report?: boolean
     routed?: EntryId
     echo?: boolean
+    serveBranch?: true
   } = {},
 ) {
   const { taskId, callId, requestId, answerId, device, via } = options
@@ -97,9 +98,14 @@ export async function send(
   const parent = from === 'user' ? undefined : await parentOf(host, from, ctx)
   const starter = parent ?? (await starterOf(host, from, ctx))
   if (input.to === 'user') {
-    if (from !== primaryId && !(parent === undefined && starter !== undefined))
+    if (parent !== undefined)
       throw new Error(
-        'Only @ultimate and branches message the user; send this to the conversation that started you.',
+        `A subagent answers the conversation that started it: give your final answer, or message #${parent}.`,
+      )
+    const isStanding = from !== 'user' && Object.values(standing ?? {}).includes(from)
+    if (!isStanding && starter === undefined)
+      throw new Error(
+        'Only @ultimate, standing agents and branches message the user; send this to the conversation that started you.',
       )
   }
   if (!input.text.trim()) throw new Error('Message text must not be empty')
@@ -186,6 +192,8 @@ export async function send(
         return response.id
       }
     }
+    if (options.serveBranch && typeof from === 'number' && typeof to === 'number')
+      await serve(host, tx, from, { kind: 'branch', id: to })
     const message = await append(tx, {
       from,
       to,

@@ -557,6 +557,8 @@ it('composes read and bash with private nested results and final JSON details', 
   )
   server.host.registry.install(
     planExtension({
+      react: () => {},
+      implement: () => {},
       metadata: Metadata,
       onOpen: () => {},
     } as unknown as ExtensionHost),
@@ -701,7 +703,6 @@ it('lists conversations with their title and cwd', async () => {
 it('lists conversations whose titles are whole prompts with short titles, far below the read limit', async () => {
   const { server } = await fixture()
   const prompt = `Rewrite the parser ${'and keep every token '.repeat(300)}`
-  expect(prompt.length).toBeGreaterThan(6000)
   const ids = await Promise.all(
     Array.from(
       { length: 40 },

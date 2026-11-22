@@ -7,6 +7,7 @@ import {
   McpAbortError,
   McpClient,
   McpError,
+  McpHttpError,
   McpTimeoutError,
   StdioTransport,
   StreamableHttpTransport,
@@ -29,6 +30,7 @@ export const pollActions = ['status']
 
 const PROGRESS_RENEWED_CALL_TIMEOUT_MS = 10 * 60_000
 const FIRST_RETRY = 5_000
+const rateLimited = (error: unknown) => error instanceof McpHttpError && error.status === 429
 const LAST_RETRY = 5 * 60_000
 
 type Entry =
@@ -163,6 +165,7 @@ const listing = (server: Server) =>
         `\n${tool.name}: ${tool.description?.trim() ?? tool.title ?? ''}\n  input: ${JSON.stringify(tool.inputSchema)}`,
     ),
   ].join('\n')
+const schemaOf = (tool: Tool) => `${tool.name} input: ${JSON.stringify(tool.inputSchema)}`
 const renewTimeoutOnProgress = () => {}
 const failure = (text: string) => ({ output: [{ type: 'text' as const, text }], isError: true })
 
@@ -361,6 +364,8 @@ export default async function mcp(host: ExtensionHost) {
       })
     } catch (error) {
       const brokenConnectionNoResend = !(
+        rateLimited(error) ||
+        signal?.aborted ||
         error instanceof McpError ||
         error instanceof McpTimeoutError ||
         error instanceof McpAbortError
@@ -401,7 +406,13 @@ export default async function mcp(host: ExtensionHost) {
                 const result = await call(name, tool, args ?? {}, context.abortSignal)
                 return { output: toLlmContent(result), isError: result.isError === true }
               } catch (error) {
-                return failure(error instanceof Error ? error.message : String(error))
+                const known = servers.get(name)?.tools.find((entry) => entry.name === tool)
+                return failure(
+                  (error instanceof Error ? error.message : String(error)) +
+                    (error instanceof Error && error.cause instanceof McpError && known
+                      ? `\n${schemaOf(known)}`
+                      : ''),
+                )
               }
             },
           }),

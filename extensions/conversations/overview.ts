@@ -1,22 +1,12 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { onCommit } from '../../lib/commits.ts'
-import { defineDoc, InboxDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { InboxDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, SubmissionRecord } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { resetAfter, Summaries } from './summary.ts'
 import { isInput } from '../../lib/entries.ts'
-import { OverviewDoc } from './refs.ts'
-import type { OverviewRow, OverviewState } from './types.ts'
-
-export const Overview = defineDoc<OverviewState>({
-  kind: OverviewDoc.kind,
-  checkpointWhen: () => false,
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({ conversations: {} }),
-})
+import { Overview } from './api.ts'
+import type { OverviewRow } from './types.ts'
 
 const nonFailureSettlements = new Set(['aborted', 'reset', 'stale'])
 const queuedFollowUpLookback = 32
@@ -46,9 +36,8 @@ async function lastPlacedInput(
 }
 
 export function overviewBehavior(
-  host: Pick<ExtensionHost, 'harness' | 'scanSubmissions' | 'onOpen' | 'onClose' | 'notice'>,
+  host: Pick<ExtensionHost, 'harness' | 'scanSubmissions' | 'onOpen' | 'notice'>,
 ) {
-  let stop: (() => void) | undefined
   let closed = false
   let draining: Promise<void> | undefined
   const pending = new Set<ConversationId>()
@@ -114,9 +103,9 @@ export function overviewBehavior(
         if (pending.size && !closed) schedule()
       })
   }
-  host.onOpen(async () => {
+  host.onOpen(async (opened) => {
     closed = false
-    stop = onCommit(host.harness(), (publication) => {
+    const stop = onCommit(host.harness(), (publication) => {
       for (const change of publication.changes) {
         if (change.type === 'conversation') pending.add(change.value.id)
         if (change.type === 'submission') pending.add(change.value.conversationId)
@@ -138,6 +127,11 @@ export function overviewBehavior(
       }
       if (pending.size) schedule()
     })
+    opened.defer(async () => {
+      closed = true
+      stop()
+      await draining
+    })
     await host.harness().commit(async (tx) => {
       let cursor: Cursor | undefined
       do {
@@ -147,11 +141,6 @@ export function overviewBehavior(
       } while (cursor !== undefined)
     }, context)
     schedule()
-    await draining
-  })
-  host.onClose(async () => {
-    closed = true
-    stop?.()
     await draining
   })
 }

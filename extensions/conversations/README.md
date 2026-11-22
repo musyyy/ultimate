@@ -11,13 +11,13 @@ conversations it configures (see the [subagents README](../subagents/README.md))
 ## Sidebar
 
 The sidebar, its rows and the phone title bar's @ultimate button live in the [sidebar](../sidebar/README.md) extension, which
-reads this extension's overview, titles and actions. `ui.tsx` declares the points it renders for optional extensions:
+reads this extension's overview, titles and actions. `ui.solid.tsx` declares the points it renders for optional extensions:
 `ConversationPhase` (a working conversation's phase) and `ConversationTask` (the plan task a child works on).
 
 It provides the core's `ComposerPlaceholder`: an idle standing agent's composer reads "Message <title>…" by its
-definition's `title` (`standing.tsx`), in the dock, the full view and on a phone alike; @ultimate's
+definition's `title` (`standing.solid.tsx`), in the dock, the full view and on a phone alike; @ultimate's
 keeps the core's text. It also provides `EmptyTranscript`: before its first message, a standing agent's transcript shows
-its mark, title and `@name` (`standing.tsx`) instead of the core's card of repo, model and host.
+its mark, title and `@name` (`standing.solid.tsx`) instead of the core's card of repo, model and host.
 
 ## Server facet
 
@@ -33,7 +33,9 @@ blocking startup. The status line reads this same document, independent of which
 
 `compactions.ts` emits `conversations.compacted` `{ conversation, entry, reason? }` (`Compacted` in `refs.ts`) for
 each compaction summary Pi places. Pi appends it in its compaction task with no hook in that commit, so a commit
-watcher emits it in a commit of its own: a crash between the two loses the event, nothing repeats it. The same
+watcher emits it in a commit of its own. A root document keeps the newest entry announced; each open catches up, in the
+background, on compactions committed past it while nothing watched, so a stop between the two commits delays the event
+rather than losing it. The first open marks existing history as announced. The same
 watcher raises a notice when a compaction its conversation owns (background or manual) fails; a blocking one's failure
 ends the run waiting on it, which reports itself.
 
@@ -74,6 +76,11 @@ list. No state-key migration runs automatically.
 - `resume {ids:number[]}`: transactionally removes ids and their concluded ancestors from the list, returning
   `{ resumed: number[] }` for the removed ids. The next input recreates a released checkout from the target tip;
   Resume itself does not create one.
+
+`activity {ids:number[]}` returns `{ [id]: { turns, calls, cost, lastAt? } }` for the sidebar's in-flight rows.
+It counts each conversation's own inputs and tool calls, excluding inherited history, and sums model and tool spend in
+`pi.usage` in dollars. `lastAt` is the newest model message timestamp in Unix milliseconds. Unknown ids are omitted;
+later reads count only newly appended entries, using an in-process checkpoint rather than new stored state.
 
 The single-conversation actions below reject bad args, unknown conversations, and subagents:
 
@@ -179,8 +186,8 @@ footer names the project file to edit. Two actions back it:
 - `summaryModel` → `{ value, source: 'default' | 'user' | 'project', default, path? }`; `path` is the project file
   when it decides the value.
 - `setSummaryModel {value}`: a `provider/id[:thinking]` string, or `null` to remove it; returns the new effective
-  setting. It refuses while a project setting applies. Writes reuse onboarding's atomic settings writer
-  (`extensions/onboarding/settings.ts`).
+  setting. It refuses while a project setting applies. Writes go through the atomic settings writer
+  (`lib/settings.ts`).
 
 `summary-model-ref.ts` parses the value without node imports, so the web facet shares it: only a recognized final
 thinking level is stripped, so model ids may contain colons (`x-ai/grok-4.3:batch:high`).
@@ -189,7 +196,10 @@ It provides the `conversations` service: `subject(id)` returns a conversation's 
 which workspaces snapshots for each submission. `concluded(caller)` returns a `Promise<Set<ConversationId>>`
 from the server-owned concluded list, used by workspaces to release checkouts on open.
 `generatedTitle(tx, id, title)` marks a new branch's or root's intent title as generated, so its summary may replace
-it; lineage calls it from its `named` reactor. This extension declares two extension points in `api.ts`:
+it; lineage calls it from its `named` reactor. `submitAfter(tx, to, draft)` has the `conversations.submit` task submit
+`draft` to `to` right after the commit, for commits that cannot admit it with `submit(tx, draft)` themselves: one that
+creates `to` (a branch's prompt, a side chat's first input), or a reactor's commit that holds no handle of `to` (a
+landing note, a dream request on a fire). An input keeps `to` busy until it is admitted. This extension declares two extension points in `api.ts`:
 `conversations.trees` (`rootOf`, `branchOf`, `abstract`; lineage provides it) and `conversations.release`
 (workspaces provides it), so it depends on neither.
 

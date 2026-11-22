@@ -312,7 +312,7 @@ export default async function models(host: ExtensionHost) {
     name: 'models',
     hooks: [
       hook(GenerationTask, {
-        // Pi upstream: @earendil-works/pi-durable@1.5.2 — patched transactional beforeInput hook.
+        // Pi upstream: @earendil-works/pi-durable@1.6.0 — patched transactional beforeInput hook.
         beforeInput: (_input, { tx, conversationId }) =>
           fallback(host, tx, conversationId, blocked),
       }),

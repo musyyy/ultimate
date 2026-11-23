@@ -17,7 +17,8 @@ Exactly one per automation:
 - **Context.** `condition: {metric: 'context', of: '@name' | '#id', above: 80, cooldownMs?: 3600000, idleFor?}` fires
   when the conversation's context crosses `above`, then re-arms only after it drops below `above - 10`. The cooldown
   counts from the condition's own last crossing, not manual runs. With `idleFor` (ms) it also waits until the user gave
-  `of` no input for that long (`idleFor: 0` on update removes it). Dream ships two of these on `@ultimate`
+  `of` no input for that long (`idleFor: 0` on update removes it): above the threshold it sleeps in an
+  `ultimate.automation-idle` task until then, and user input in the meantime makes it sleep again from that input. Dream ships two of these on `@ultimate`
   (`extensions/dream/README.md`).
 - **Script.** `ask` instead of a schedule: a `watcher` agent writes an executable `run`, tests it by hand until one
   check succeeds and calls `automation resume {id}`. Stdout `FIRE [text]` fires; stderr and other stdout are progress. `once` (default true)
@@ -39,6 +40,10 @@ Each automation has one or both:
   `#12` or a standing agent's `@name`, resolved at delivery, so `@ultimate` follows it across chapters. With a
   `prompt`, subscribers are woken when each run ends instead, with an `automations.finished` input whose text is the
   run's answer (or `Run failed: …`); an aborted run wakes no one.
+
+The owner of an automation can hold its fires through the `automations.hold` extension point: a held fire is dropped
+before it starts a run, wakes a subscriber or emits `automations.fired` (a condition still counts the crossing). Dream
+provides it to hold its built-ins once the chapter has dreamed.
 
 Without either, create subscribes the caller; nothing may leave an automation with neither. To be reminded, subscribe:
 a prompt run costs a whole agent turn per fire. The seventh fire within an hour pauses the automation instead,

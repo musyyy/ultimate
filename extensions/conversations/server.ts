@@ -34,6 +34,7 @@ import { activityBehavior } from './activity.ts'
 import { activityStats } from './activity-stats.ts'
 import { compactionEvents } from './compactions.ts'
 import { contextBehavior } from './context.ts'
+import { concludedIn } from './projection.ts'
 import { SubmitAfter, submitAfter } from './submit.ts'
 import {
   ContextUsageDoc,
@@ -317,11 +318,6 @@ export async function subject(
     ...(state?.summary ? { summary: state.summary } : {}),
     ...(state?.feature ? { feature: state.feature } : {}),
   }
-}
-
-export async function concludedIn(tx: Tx): Promise<Set<ConversationId>> {
-  const ids = (await tx.doc(UiState, ROOT_CONVERSATION_ID))['ext.conversations.concluded']
-  return new Set(Array.isArray(ids) ? (ids as ConversationId[]) : [])
 }
 
 export default (host: ExtensionHost) => {

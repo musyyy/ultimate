@@ -34,7 +34,7 @@ import { MessagesApi } from '../messages/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { LineageApi } from '../lineage/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
-import { AutomationsApi } from './api.ts'
+import { AutomationsApi, Hold } from './api.ts'
 import {
   CreateAction,
   DeleteAction,
@@ -665,17 +665,24 @@ function backend(host: ExtensionHost) {
         delete a.schedule
         delete a.event
         const previousTarget = a.condition?.of
+        const { metric, of, above, cooldownMs, idleFor } = args.condition
         a.condition = {
           ...a.condition,
-          ...args.condition,
-          cooldownMs: args.condition.cooldownMs ?? a.condition?.cooldownMs ?? 3600000,
+          metric,
+          of,
+          above,
+          ...(idleFor === undefined ? {} : { idleFor }),
+          cooldownMs: cooldownMs ?? a.condition?.cooldownMs ?? 3600000,
           armed: a.condition?.armed ?? true,
+        }
+        const retargeted = previousTarget !== undefined && previousTarget !== a.condition.of
+        if (!a.condition.idleFor || retargeted) {
+          delete a.condition.waker
         }
         if (!a.condition.idleFor) {
           delete a.condition.idleFor
           delete a.condition.inputAt
-        } else if (previousTarget !== undefined && previousTarget !== a.condition.of)
-          a.condition.inputAt = Date.now()
+        } else if (retargeted) a.condition.inputAt = Date.now()
       }
       if (a.script) {
         if (args.ask !== undefined) a.script.ask = required(args.ask, 'ask')
@@ -705,6 +712,7 @@ function backend(host: ExtensionHost) {
     if (args.action === 'resume' && a.event) a.event.sinceEvent = await eventActivationCursor(tx)
     if (args.action === 'create' || args.action === 'resume')
       await trigger.evaluate(tx, a, prepared.target)
+    else if (args.action === 'update') await trigger.schedule(tx, a)
     a.updatedAt = Date.now()
     if (effect) await deliver(tx, a, `update:${a.updatedAt}`, 'writing', a.script!.ask)
     if (!isDeepStrictEqual(a.schedule, oldSchedule)) delete a.nextAt
@@ -836,6 +844,7 @@ export default function automations(host: ExtensionHost) {
   host.need(SubagentsApi)
   host.need(MessagesApi)
   host.need(WorkspacesApi)
+  host.want(Hold)
   host.need(ConversationsApi)
   const api = backend(host)
   host.implement(AutomationsApi, {
@@ -865,7 +874,7 @@ export default function automations(host: ExtensionHost) {
   })
   return defineExtension({
     name: 'automations',
-    tasks: [api.Scheduler, api.RunTask, api.Deliver],
+    tasks: [api.Scheduler, api.RunTask, api.Deliver, api.trigger.IdleWaker],
     hooks: [
       hook(GenerationTask, {
         onYield: async (answer, hookApi, ctx) => {

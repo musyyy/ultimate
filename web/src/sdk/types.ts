@@ -116,10 +116,11 @@ export type ToolLineRenderer = Component<{ call: ToolCallView }>
 export type LinkRenderer = Component<{ href: string; children: JSX.Element; core: JSX.Element }>
 
 /**
- * An inline code span in Markdown (messages, reports): its text as `code`, and `core`, the
- * rendering so far, starting with the default `<code>`. Return `core` for spans you leave alone.
+ * An inline code span in Markdown (messages, reports): its text as `code`, `inLink` when it sits inside a link (which
+ * is already a control: add no button there), and `core`, the rendering so far, starting with the default `<code>`.
+ * Return `core` for spans you leave alone.
  */
-export type InlineCodeRenderer = Component<{ code: string; core: JSX.Element }>
+export type InlineCodeRenderer = Component<{ code: string; inLink: boolean; core: JSX.Element }>
 
 /**
  * A fenced code block in Markdown by its language: `code`, `language`, `incomplete` while the
@@ -146,7 +147,11 @@ export type ComposerRenderer = Component<SolidComposerProps>
 /** Where a `ComposerRedirect` sends what the composer inside it submits, and what its empty composer says. */
 export interface ComposerTarget {
   placeholder: string
-  send: (text: string) => Promise<unknown>
+  /** `images` are the pasted ones, given only to a target with `images: true`; any other refuses them. */
+  send: (text: string, images: readonly { data: string; mimeType: string }[]) => Promise<unknown>
+  images?: true
+  /** True while the target holds something of its own to send, so Enter sends even with an empty composer. */
+  ready?: () => boolean
 }
 
 /** What a document renderer receives: the shown conversation's document of its kind, live. */

@@ -53,9 +53,19 @@ import type { TranscriptFrame } from './transcript-frame.ts'
 import { subscribeViewport, viewport } from './viewport.ts'
 import type { Viewport } from './viewport.ts'
 
-export { api, bundle, switched } from './client.ts'
-/** This page's ui-sdk agent bridge (`snapshot`, `query`, `act`), to run an agent's UI steps on the user's own page. */
-export const pageAgent = () => uiAgent.bridge()
+export { api, bundle, holdReload, switched } from './client.ts'
+/**
+ * This page's ui-sdk agent bridge (`snapshot`, `query`), with the `act` the browser tool's `ui` steps use, so a label
+ * that exactly names one control acts on it: to run an agent's UI steps on the user's own page.
+ */
+export const pageAgent = () => {
+  const bridge = uiAgent.bridge()
+  return {
+    snapshot: () => bridge.snapshot(),
+    query: bridge.query,
+    act: uiAgent.act,
+  }
+}
 /** The page's event bus: `events.emit('secrets:open', { name })`; subscribe for a component's life with `useEvent`. */
 export { events } from './events.ts'
 /**
@@ -113,6 +123,11 @@ export type {
   UltimateContext,
   WebExtension,
   ComposerTarget,
+  DictationSink,
+  DictationTake,
+  PromptBoxProps,
+  PromptInput,
+  UploadSource,
   SolidComposerProps,
   SolidInboxProps,
   SolidEntryProps,
@@ -121,16 +136,21 @@ export type {
 } from './types.ts'
 /**
  * The points the core reads: a run's start, the parked runs, a message's reference, the upload target, the empty
- * transcript, the composer's placeholder, a conversation's kind and where an error card sends its report.
+ * transcript, the composer's placeholder and talk shortcut, a conversation's kind, a final answer's speaker and where
+ * an error card sends its report.
  */
 export {
+  AnswerSpeaker,
   ComposerPlaceholder,
   ConversationKind,
+  Dictation,
+  DictationShortcut,
   EmptyTranscript,
   ErrorReport,
   FileUpload,
   MessageReference,
   ParkedRuns,
+  PromptRecorder,
   RunStart,
 } from './types.ts'
 /** Whether `region` overlays the page on `viewport` (a phone's sidebar, a phone's or tablet's panel) instead of docking. */
@@ -214,7 +234,12 @@ function createReplica() {
     watch(target: Target, kind: string) {
       const release = target === 'shown' ? store.watchDoc(kind) : store.watchDocOf(target, kind)
       const key = replicaKey(target, kind)
-      const reader = watched.get(key) ?? { target, kind, readers: 0, seen: undefined }
+      const reader = watched.get(key) ?? {
+        target,
+        kind,
+        readers: 0,
+        seen: undefined,
+      }
       if (reader.readers++ === 0) {
         watched.set(key, reader)
         reader.seen = immutableDoc(store.getState(), target, kind)
@@ -438,6 +463,12 @@ export const useExtensions = once((): Accessor<readonly ExtensionRecord[]> => {
   return records
 })
 
+/** Whether extension `name` is on in this page: what an extension that `wants` another shows only while it is. */
+export function useEnabled(name: string): Accessor<boolean> {
+  const records = useExtensions()
+  return () => records().some((record) => record.name === name)
+}
+
 /**
  * Page extension readiness: `ready`, `timedOut`, and the names that `failed` or are still `pending`.
  */
@@ -466,10 +497,13 @@ export const { switchConversation, showSurface, runCommand, openPanel, closePane
 export { uncoveredComposer } from './actions.ts'
 /**
  * `fillComposer(id, text)` replaces conversation `id`'s composer draft, `insertIntoComposer(id, text)` inserts at its
- * cursor. `composerImages(id)` reads the images pasted into its composer, and `clear()` removes them once sent unless
- * they changed meanwhile.
+ * cursor. `composerDraft(id)` reads the text, images and number of attached files in its composer (`id` may be a `ComposerTarget`'s `draft` key),
+ * and `attachments`, the prompt lines of the files that finished uploading;
+ * `reserve()` marks the draft as being sent, which locks the box and Enter (undefined when a send already holds it),
+ * and returns `release(sent)`: `'all'` or `'attachments'` removes the images and finished files that were sent (and with
+ * `'all'` the text) unless they changed meanwhile, nothing keeps it; `subscribe(listener)` hears every change to that draft.
  */
-export { composerImages, fillComposer, insertIntoComposer } from '../app/drafts.ts'
+export { composerDraft, fillComposer, insertIntoComposer } from '../app/drafts.ts'
 
 /** The conversation `ConversationScope` gives, or the shown one once known. */
 export function useConversationId(): Accessor<ConversationId | undefined> {
@@ -687,7 +721,11 @@ export function useRestart(timeoutMs = 120_000) {
   const connection = useConnection()
   const [state, setState] = createSignal<RestartPhase>({ phase: 'idle' })
   createEffect(
-    () => ({ current: state(), system: system(), open: connection().status === 'open' }),
+    () => ({
+      current: state(),
+      system: system(),
+      open: connection().status === 'open',
+    }),
     ({ current, system: info, open }) => {
       const next = restartPhase(current, info, open)
       if (next !== current) setState(next)

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { Message } from '@earendil-works/pi-ai'
+import { clampThinkingLevel } from '@earendil-works/pi-ai'
+import type { Message, ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { ConversationId, Cursor, EntryId, Tx } from '@earendil-works/pi-durable'
 import {
   AgentDoc,
@@ -22,7 +23,7 @@ import { implementAction } from '../../lib/actions.ts'
 import { defineEffect } from '../../lib/effect.ts'
 import { openaiSecretOrNonOAuthKey, openaiTranscribe } from '../../lib/openai.ts'
 import { readSecret } from '../../lib/secrets.ts'
-import { imagesOf } from '../../lib/entries.ts'
+import { imagesOf, isInput } from '../../lib/entries.ts'
 import { offsetEntryId } from '../../lib/ids.ts'
 import { safeToRerun } from '../../lib/replay.ts'
 import {
@@ -33,25 +34,25 @@ import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import { ClassifyApi } from '../classify/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { Family } from '../models/api.ts'
 import { Branch } from '../lineage/api.ts'
 import { Standing } from '../subagents/api.ts'
+import { VideoApi } from '../video/api.ts'
 import { VoiceHandoffEntry, VoiceTurnEntry } from './entries.ts'
 import {
   EndAction,
   RecordAction,
-  ModelAction,
   OpenAction,
+  PickAction,
   StatusAction,
   StopAction,
   DiscardAction,
   IntentAction,
-  SpeakAction,
   TurnAction,
   UiAnswerAction,
   UiClaimAction,
 } from './refs.ts'
 import type {
-  OpenAiVoice,
   VoiceDelivery,
   VoiceFork,
   VoiceHandoff,
@@ -61,38 +62,46 @@ import type {
   VoiceUi,
 } from './refs.ts'
 import { voicePrompt } from './prompt.ts'
-import { createRealtimeVoice } from './openai-voice.ts'
-import { MAX_SPOKEN, VOICES } from './voices.ts'
 
-const DEFAULT_MODEL = { provider: 'antigravity', modelId: 'gemini-4-neon-low' }
+const DEFAULT_MODEL = { provider: 'claude-code', modelId: 'claude-opus-5-5' }
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024
 const PLACEHOLDER = '(no transcript yet)'
 const TRANSCRIBE_TIMEOUT_MS = 65_000
+const MAX_WORDS = 6_000
+const UNHEARD = '(still being transcribed)'
 const VOICE_TOOLS = [
   'read',
   'memory',
   'web_search',
   'web_fetch',
+  'video_ask',
   'codemode',
   'action',
   'ui',
   'voice_handoff',
 ]
 const UI_TIMEOUT_MS = 15_000
-const SPEAK_TIMEOUT_MS = 20_000
+const THINKING_LEVELS: readonly ModelThinkingLevel[] = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]
 
 export const userActions = [
   'open',
   'record',
   'turn',
-  'model',
+  'pick',
   'stop',
   'end',
   'ui-claim',
   'ui-answer',
   'discard',
   'intent',
-  'speak',
 ]
 
 export const Session = defineDoc<VoiceSession>({
@@ -241,41 +250,56 @@ async function checkBranch(
     throw new Error(`#${id} is concluded`)
 }
 
-async function concludeHandedOff(host: ExtensionHost) {
-  const id = (await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context))?.id
-  if (id === undefined || !(await host.harness().snapshot(Fork, id, context))?.handedOff) return
-  await host.harness().commit(async (tx) => {
-    const session = await tx.doc(Session, ROOT_CONVERSATION_ID)
-    if (session.id !== id) return
-    ;(await tx.doc(Fork, id)).ended = true
-    keepModel(session, await tx.doc(AgentDoc, id))
-    delete session.id
-    await host.need(ConversationsApi).concludeIn(tx, [id], 'user')
-  }, context)
-}
-
 function keepModel(
   session: VoiceSession,
-  agent: { model?: { provider: string; modelId: string } },
+  agent: { model?: { provider: string; modelId: string }; thinkingLevel?: ModelThinkingLevel },
 ) {
   if (agent.model) session.model = `${agent.model.provider}/${agent.model.modelId}`
+  if (agent.thinkingLevel) session.thinking = agent.thinkingLevel
 }
 
-async function openSession(host: ExtensionHost) {
+function thinkingFor(
+  host: ExtensionHost,
+  ref: { provider: string; modelId: string },
+  picked: ModelThinkingLevel = 'low',
+) {
+  const model = host.modelRuntime.getModel(ref.provider, ref.modelId)
+  return model ? clampThinkingLevel(model, picked) : picked
+}
+
+const sessionArg = (value: unknown) => {
+  if (value === undefined) return undefined
+  if (typeof value !== 'number') throw new Error('Expected session as a conversation id')
+  return value as ConversationId
+}
+
+async function openSession(host: ExtensionHost, expected?: ConversationId) {
   const main = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
   if (main === undefined) throw new Error('@ultimate is not available')
   const answer = await lastSettledInputAnswer(host, main, context)
-  await concludeHandedOff(host)
-  const model = await voiceModel(host)
+  const configured = await voiceModel(host)
   return host.harness().commit(async (tx) => {
     const session = await tx.doc(Session, ROOT_CONVERSATION_ID)
-    if (session.id !== undefined && !(await tx.doc(Fork, session.id)).ended) return session.id
+    const current = session.id === undefined ? undefined : await tx.doc(Fork, session.id)
+    const open = current !== undefined && !current.ended
+    if (expected !== undefined && (!open || session.id !== expected))
+      throw new Error('This voice session ended; send again')
+    let model = configured
+    if (open && !current.handedOff) return session.id!
     const at = await answerIncludingClosingToolResults(tx, main, answer)
+    if (open) {
+      current.ended = true
+      const handedOff = await tx.doc(AgentDoc, session.id!)
+      keepModel(session, handedOff)
+      model = handedOff.model ?? configured
+      await host.need(ConversationsApi).concludeIn(tx, [session.id!], 'user')
+    }
     const fork = await tx.forkConversation(main, at, { ownership: { kind: 'ownerless' } })
     Object.assign(await tx.doc(Fork, fork.id), { of: main, at, seen: at })
     const agent = await tx.doc(AgentDoc, fork.id)
     agent.model = model
-    agent.thinkingLevel = 'low'
+    agent.thinkingLevel = thinkingFor(host, model, session.thinking)
+    ;(await tx.doc(Family, fork.id)).name = null
     const own = ['ui', 'voice_handoff']
     const tools = agent.tools
     if (Array.isArray(tools))
@@ -295,6 +319,50 @@ async function openSession(host: ExtensionHost) {
     })
     return fork.id
   }, context)
+}
+
+const ANSWER_QUESTION = {
+  type: 'choice' as const,
+  instructions:
+    "The assistant's last reply may end with a question for the user, who answers by voice in one or more recordings. Read the latest recording after what was collected before it. Where does the user's answer stand?",
+  criteria: {
+    none: "The assistant's last reply asked the user no question, or the user talks about something else.",
+    unfinished:
+      'An answer is under way but not done: it breaks off mid-sentence, trails off, says more is coming, or keeps weighing options aloud.',
+    complete:
+      'A clean, finished answer to the question the assistant just asked: the user has said what they want and the thought is settled.',
+  },
+}
+const ANSWER_THRESHOLD = 0.85
+
+async function openQuestion(host: ExtensionHost, id: ConversationId, forkedAt: EntryId) {
+  const conversation = (await host.harness().conversation(id, context))!
+  let cursor: Cursor | undefined
+  do {
+    const page = await conversation.entries(
+      { minEntryId: offsetEntryId(forkedAt, 1) },
+      100,
+      cursor,
+      context,
+    )
+    for (const entry of page.items) {
+      if (isInput(entry)) return undefined
+      if (entry.kind !== 'pi.assistant') continue
+      const text = (entry.model ?? [])
+        .flatMap((message) =>
+          message.role === 'assistant'
+            ? message.content.flatMap((part) => (part.type === 'text' ? [part.text] : []))
+            : [],
+        )
+        .join(' ')
+        .trim()
+      if (!text) continue
+      const ending = text.split(/\n\s*\n/).at(-1)!
+      return ending.includes('?') ? ending : undefined
+    }
+    cursor = page.next
+  } while (cursor)
+  return undefined
 }
 
 async function sinceFork(tx: Tx, main: ConversationId, after: EntryId) {
@@ -326,17 +394,34 @@ async function sinceFork(tx: Tx, main: ConversationId, after: EntryId) {
   return lines.slice(-12)
 }
 
-const voices = new WeakMap<ExtensionHost, ReturnType<typeof createRealtimeVoice>>()
-const realtimeVoice = (host: ExtensionHost) => {
-  const known = voices.get(host)
-  if (known) return known
-  const made = createRealtimeVoice()
-  voices.set(host, made)
-  host.onClose(async () => {
-    voices.delete(host)
-    made.close()
-  })
-  return made
+function spoken(turn: VoiceTurn, fork: VoiceFork) {
+  if (turn.route === 'text') return turn.text
+  const clips = turn.clips ?? (turn.audio ? [turn.audio] : [])
+  const heard = clips.map((clip) =>
+    fork.failed?.[clip] !== undefined ? '' : (fork.transcripts?.[clip] ?? UNHEARD),
+  )
+  return [...heard, turn.text].filter(Boolean).join(' ')
+}
+
+async function wordsOf(tx: Tx, session: ConversationId, fork: VoiceFork) {
+  const turns: string[] = []
+  let cursor: Cursor | undefined
+  do {
+    const page = await tx.scanEntries(
+      { conversationId: session, minEntryId: offsetEntryId(fork.at!, 1), order: 'ascending' },
+      200,
+      cursor,
+    )
+    for (const entry of page.items)
+      if (VoiceTurnEntry.is(entry)) turns.push(spoken(entry.data, fork))
+    cursor = page.next
+  } while (cursor)
+  const said = turns.map((turn) => turn.trim()).filter(Boolean)
+  let kept = 0
+  let size = 0
+  while (kept < said.length && (kept === 0 || size + said.at(-1 - kept)!.length <= MAX_WORDS))
+    size += said.at(-1 - kept++)!.length
+  return { words: said.slice(said.length - kept), earlier: said.length - kept }
 }
 
 const unwrap = <T extends object>(args: unknown) =>
@@ -344,12 +429,13 @@ const unwrap = <T extends object>(args: unknown) =>
 
 export const actions = {
   status: implementAction(StatusAction, async (_args, { host }) => {
-    const open = (await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context))?.id
-    const model =
-      (open === undefined
+    const session = await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context)
+    const agent =
+      session?.id === undefined
         ? undefined
-        : (await host.harness().snapshot(AgentDoc, open, context))?.model) ??
-      (await voiceModel(host))
+        : await host.harness().snapshot(AgentDoc, session.id, context)
+    const model = agent?.model ?? (await voiceModel(host))
+    const thinking = agent?.thinkingLevel ?? thinkingFor(host, model, session?.thinking)
     const available = host.modelRuntime
       .getAvailableSnapshot()
       .some((listed) => listed.provider === model.provider && listed.id === model.modelId)
@@ -359,6 +445,7 @@ export const actions = {
       !!host.want(ClassifyApi) && !!(await readSecret(host.userHome, 'TYPESAFE_API_KEY'))
     return {
       model: name,
+      thinking,
       route: hearsAudio(model) ? ('audio' as const) : ('text' as const),
       transcribes,
       ...(available ? {} : { reason: `${name} has no login` }),
@@ -368,15 +455,12 @@ export const actions = {
               ready: true,
               detail: hearsAudio(model)
                 ? `${name}: hears your voice directly`
-                : `${name}: reads the transcript (Gemini Neon hears your voice directly)`,
+                : `${name}: reads the transcript`,
             }
           : {
               ready: false,
               detail: `${name} has no login`,
-              fix:
-                model.provider === 'antigravity'
-                  ? 'Recommended: Gemini 4 Neon through Antigravity. Sign in with `agy` on this machine, or pick another model in the voice settings.'
-                  : 'Log in to its provider, or pick another model in the voice settings.',
+              fix: 'Log in to its provider, or pick another model in the prompt box below.',
             },
         transcription: transcribes
           ? {
@@ -399,10 +483,16 @@ export const actions = {
     }
   }),
   record: implementAction(RecordAction, async (args, { host }) => {
-    const { audio, mimeType, collect } = unwrap<{
+    const {
+      audio,
+      mimeType,
+      collect,
+      session: expected,
+    } = unwrap<{
       audio: unknown
       mimeType: unknown
       collect: unknown
+      session: unknown
     }>(args)
     if (
       typeof audio !== 'string' ||
@@ -414,13 +504,15 @@ export const actions = {
     if (Buffer.byteLength(audio, 'base64') > MAX_AUDIO_BYTES)
       throw new Error('The recording is too large')
     const id = randomUUID()
-    const session = await openSession(host)
+    const session = await openSession(host, sessionArg(expected))
     await mkdir(recordings(host, session), { recursive: true })
     await writeFile(recordingPath(host, session, id), JSON.stringify({ data: audio, mimeType }), {
       mode: 0o600,
     })
     const clip = unwrap<{ seconds: unknown; envelope: unknown }>(collect)
     await host.harness().commit(async (tx) => {
+      if ((await tx.doc(Fork, session)).ended)
+        throw new Error('This voice session ended; record again')
       await tx.createTask(
         transcribe(host),
         { session, audio: id },
@@ -438,18 +530,58 @@ export const actions = {
       ]
     }, context)
     host.harness().resume()
-    return { audio: id }
+    return { audio: id, session }
+  }),
+  pick: implementAction(PickAction, async (args, action) => {
+    const { host } = action
+    const { model, thinkingLevel } = unwrap<{ model: unknown; thinkingLevel: unknown }>(args)
+    const { provider, modelId } = unwrap<{ provider: unknown; modelId: unknown }>(model)
+    if (
+      model !== undefined &&
+      (typeof provider !== 'string' ||
+        typeof modelId !== 'string' ||
+        !host.modelRuntime.getModel(provider, modelId))
+    )
+      throw new Error('Expected model as a known { provider, modelId }')
+    if (thinkingLevel !== undefined && !THINKING_LEVELS.includes(thinkingLevel as never))
+      throw new Error(`Expected thinkingLevel as one of ${THINKING_LEVELS.join(', ')}`)
+    await host.harness().commit(async (tx) => {
+      const session = await tx.doc(Session, ROOT_CONVERSATION_ID)
+      if (session.id !== undefined)
+        throw new Error('A voice session is open: pick its model in its own prompt box')
+      const picked = () => `${session.model ?? ''}:${session.thinking ?? ''}`
+      const previous = picked()
+      if (model !== undefined) session.model = `${provider as string}/${modelId as string}`
+      if (thinkingLevel !== undefined) session.thinking = thinkingLevel as ModelThinkingLevel
+      await action.uiChanged(tx, { key: 'voice-live.pick', value: picked(), previous })
+    }, context)
+    return {}
   }),
   open: implementAction(OpenAction, async (_args, { host }) => ({
     conversation: await openSession(host),
   })),
   turn: implementAction(TurnAction, async (args, { host }) => {
-    const { key, text, audio, clips, delivery, seconds, envelope, hint, screen, images } = unwrap<{
+    const {
+      key,
+      text,
+      audio,
+      clips,
+      delivery,
+      answered,
+      seconds,
+      envelope,
+      hint,
+      screen,
+      images,
+      session: expected,
+    } = unwrap<{
+      session: unknown
       key: unknown
       text: unknown
       audio: unknown
       clips: unknown
       delivery: unknown
+      answered: unknown
       seconds: unknown
       envelope: unknown
       hint: unknown
@@ -478,7 +610,8 @@ export const actions = {
     if (pictures.length > maxImages) throw new Error(`At most ${maxImages} images`)
     if (!text.trim() && typeof audio !== 'string' && !pictures.length)
       throw new Error('Expected text, a recording or an image')
-    const id = await openSession(host)
+    if (answered === true && !collected) throw new Error('An answer sends the collected clips')
+    const id = await openSession(host, sessionArg(expected))
     for (const clip of collected ?? (typeof audio === 'string' ? [audio] : []))
       await readRecording(host, id, clip).catch(() => {
         throw new Error('That recording belongs to an ended session; record again')
@@ -493,6 +626,7 @@ export const actions = {
       ...(collected ? { audio: collected[0] } : typeof audio === 'string' ? { audio } : {}),
       ...(collected && collected.length > 1 ? { clips: collected } : {}),
       ...(delivery === 'followUp' ? { delivery: 'followUp' as const } : {}),
+      ...(answered === true ? { answered: true as const } : {}),
       ...(typeof seconds === 'number' && Number.isFinite(seconds) ? { seconds } : {}),
       ...(levels?.length ? { envelope: levels } : {}),
       ...(typeof hint === 'string' && hint.trim() ? { hint: hint.trim() } : {}),
@@ -515,9 +649,12 @@ export const actions = {
       const fork = await tx.doc(Fork, id)
       if (fork.ended) throw new Error('This voice session ended; send again')
       if (collected) {
-        const held = new Set((fork.draft ?? []).map((clip) => clip.audio))
-        if (!collected.every((clip) => held.has(clip)))
-          throw new Error('The collected recordings changed; send again')
+        const held = (fork.draft ?? []).map((clip) => clip.audio)
+        const changed =
+          answered === true
+            ? held.join() !== collected.join()
+            : !collected.every((clip) => held.includes(clip))
+        if (changed) throw new Error('The collected recordings changed; send again')
       }
       const silent =
         group.length > 0 &&
@@ -544,21 +681,6 @@ export const actions = {
     if (outcome === 'dropped') return { conversation: id, route, dropped: true as const }
     return { conversation: id, route }
   }),
-  model: implementAction(ModelAction, async (args, { host }) => {
-    const { model } = unwrap<{ model: unknown }>(args)
-    if (typeof model !== 'string' || !/^[^/\s]+\/\S+$/.test(model))
-      throw new Error('Expected { model: "provider/model" }')
-    const [provider, ...rest] = model.split('/')
-    const ref = { provider, modelId: rest.join('/') }
-    if (!host.modelRuntime.getModel(ref.provider, ref.modelId))
-      throw new Error(`Unknown model ${model}`)
-    await host.harness().commit(async (tx) => {
-      const session = await tx.doc(Session, ROOT_CONVERSATION_ID)
-      session.model = model
-      if (session.id !== undefined) (await tx.doc(AgentDoc, session.id)).model = ref
-    }, context)
-    return {}
-  }),
   discard: implementAction(DiscardAction, async (_args, { host }) => {
     const id = (await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context))?.id
     if (id === undefined) return {}
@@ -567,37 +689,32 @@ export const actions = {
     }, context)
     return {}
   }),
-  speak: implementAction(SpeakAction, async (args, { host, signal }) => {
-    const { voice, text } = unwrap<{ voice: unknown; text: unknown }>(args)
-    if (!VOICES.includes(voice as OpenAiVoice)) throw new Error(`Unknown voice: ${String(voice)}`)
-    if (
-      text !== undefined &&
-      (typeof text !== 'string' || !text.trim() || text.length > MAX_SPOKEN)
-    )
-      throw new Error(`Expected text of at most ${MAX_SPOKEN} characters`)
-    const key = await openaiSecretOrNonOAuthKey(host, signal)
-    if (!key) throw new Error('OpenAI voice needs OPENAI_API_KEY in ⌘K → Secrets')
-    const realtime = realtimeVoice(host)
-    const bounded = AbortSignal.any([signal, AbortSignal.timeout(SPEAK_TIMEOUT_MS)])
-    if (text === undefined) return await realtime.connect(key, bounded).then(() => ({}))
-    const wav = await realtime.speak(key, text, voice as OpenAiVoice, bounded)
-    return { audio: wav.toString('base64') }
-  }),
   intent: implementAction(IntentAction, async (args, { host, signal }) => {
     const { audio } = unwrap<{ audio: unknown }>(args)
     if (typeof audio !== 'string') throw new Error('Expected { audio }')
     const id = (await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context))?.id
     if (id === undefined) return {}
     const fork = await host.harness().snapshot(Fork, id, context)
-    const said = fork?.transcripts?.[audio]
-    if (said === undefined || !fork?.draft?.some((clip) => clip.audio === audio)) return {}
+    if (
+      fork?.transcripts?.[audio] === undefined ||
+      !fork.draft?.some((clip) => clip.audio === audio)
+    )
+      return {}
     const classify = host.want(ClassifyApi)
     if (!classify) return { unavailable: 'Spoken send needs the classify extension and its key' }
-    const before = (fork?.draft ?? [])
-      .filter((clip) => clip.audio !== audio)
-      .map((clip) => fork?.transcripts?.[clip.audio] ?? '')
+    const collected = fork.draft
+    const heard = collected.map((clip) => fork.transcripts?.[clip.audio])
+    const question =
+      heard.every((text) => text !== undefined) && fork.at !== undefined
+        ? await openQuestion(host, id, fork.at)
+        : undefined
+    const latest = question ? collected.at(-1)!.audio : audio
+    const said = fork.transcripts[latest]
+    const before = collected
+      .filter((clip) => clip.audio !== latest)
+      .map((clip) => fork.transcripts?.[clip.audio] ?? '')
       .join(' ')
-    const { answers } = await classify.ask(
+    const asking = classify.ask(
       {
         state: { collectedSoFar: before, latestRecording: said },
         questions: {
@@ -622,17 +739,46 @@ export const actions = {
       },
       signal,
     )
+    const answering = Promise.allSettled(
+      question
+        ? [
+            classify.ask(
+              {
+                state: {
+                  assistantLastReply: question,
+                  collectedSoFar: before,
+                  latestRecording: said,
+                },
+                questions: { answer: ANSWER_QUESTION },
+              },
+              signal,
+            ),
+          ]
+        : [],
+    )
+    const { answers } = await asking
     const send = answers.send
-    if (send?.type !== 'choice' || send.choice === 'hold' || send.confidence < 0.6) return {}
+    const commanded = send?.type === 'choice' && send.choice !== 'hold' && send.confidence >= 0.6
+    if (!commanded) {
+      const [replied] = await answering
+      if (replied?.status === 'rejected') throw replied.reason
+      const answer = replied?.value.answers.answer
+      if (answer?.type !== 'choice' || (answer.probabilities.complete ?? 0) < ANSWER_THRESHOLD)
+        return {}
+      return {
+        send: 'steer' as const,
+        clips: collected.map((clip) => clip.audio),
+        answered: true as const,
+      }
+    }
     const only = answers.only?.type === 'noul' && answers.only.noul > 0.5
     if (only)
       await host.harness().commit(async (tx) => {
         const draft = await tx.doc(Fork, id)
-        draft.draft = (draft.draft ?? []).filter((clip) => clip.audio !== audio)
+        if (draft.ended) return
+        draft.draft = (draft.draft ?? []).filter((clip) => clip.audio !== latest)
       }, context)
-    const clips = (fork?.draft ?? [])
-      .map((clip) => clip.audio)
-      .filter((clip) => !(only && clip === audio))
+    const clips = collected.map((clip) => clip.audio).filter((clip) => !(only && clip === latest))
     return {
       send: send.choice as VoiceDelivery,
       clips,
@@ -674,22 +820,24 @@ export const actions = {
     return {}
   }),
   end: implementAction(EndAction, async (_args, { host }) => {
-    const id = (await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context))?.id
-    if (id === undefined) return {}
-    await (await host.harness().conversation(id, context))?.abort(context, { background: true })
-    const ended = await host.harness().commit(async (tx) => {
+    const id = await host.harness().commit(async (tx) => {
       const session = await tx.doc(Session, ROOT_CONVERSATION_ID)
-      if (session.id !== id) return false
-      ;(await tx.doc(Fork, id)).ended = true
-      keepModel(session, await tx.doc(AgentDoc, id))
+      const ending = session.id
+      if (ending === undefined) return undefined
+      const fork = await tx.doc(Fork, ending)
+      fork.ended = true
+      delete fork.draft
+      keepModel(session, await tx.doc(AgentDoc, ending))
       delete session.id
       delete session.of
       delete session.at
       delete session.startedAt
-      await host.need(ConversationsApi).concludeIn(tx, [id], 'user')
-      return true
+      await host.need(ConversationsApi).concludeIn(tx, [ending], 'user')
+      return ending
     }, context)
-    if (ended) await rm(recordings(host, id), { recursive: true, force: true })
+    if (id === undefined) return {}
+    await (await host.harness().conversation(id, context))?.abort(context, { background: true })
+    await rm(recordings(host, id), { recursive: true, force: true })
     return {}
   }),
 }
@@ -756,7 +904,7 @@ export default function voiceExtension(host: ExtensionHost) {
               model: [
                 {
                   role: 'user' as const,
-                  content: voicePrompt(conversationId, fork.of),
+                  content: voicePrompt(conversationId, fork.of, !!host.want(VideoApi)),
                   timestamp: Date.now(),
                 },
               ],
@@ -911,6 +1059,11 @@ export default function voiceExtension(host: ExtensionHost) {
               : []),
             `Instruction: ${args.instruction}`,
           ]
+          const quoted = (words: string[], earlier: number) => [
+            '',
+            `Daniel's words in voice mode, oldest first${earlier ? ` (${earlier} earlier turns left out)` : ''}:`,
+            ...words.map((said) => `> ${said.replaceAll('\n', '\n> ')}`),
+          ]
           const receiver = await host.harness().conversation(target, ctx)
           if (!receiver) throw new Error(`#${target} does not exist`)
           await host.harness().commit(async (tx) => {
@@ -926,14 +1079,19 @@ export default function voiceExtension(host: ExtensionHost) {
                   .toReversed()
               : []
             if (shared.length) handoff.images = shared.length
+            const session = await tx.doc(Fork, api.conversationId)
+            const { words, earlier } = await wordsOf(tx, api.conversationId, session)
+            if (words.length) handoff.words = words
+            if (earlier) handoff.earlier = earlier
+            const text = [...lines, ...(words.length ? quoted(words, earlier) : [])].join('\n')
             await receiver.submit(tx, {
               type: 'input',
               requestId,
               whenBusy: branch === undefined ? 'followUp' : 'steer',
               entry: { kind: VoiceHandoffEntry.kind, data: handoff },
-              content: [{ type: 'text', text: lines.join('\n') }, ...shared],
+              content: [{ type: 'text', text }, ...shared],
             })
-            ;(await tx.doc(Fork, api.conversationId)).handedOff = true
+            session.handedOff = true
           }, ctx)
           host.harness().resume()
           return {

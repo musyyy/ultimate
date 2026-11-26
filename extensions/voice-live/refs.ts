@@ -1,5 +1,6 @@
 /** Voice mode: a push-to-talk fork of @ultimate, its actions, session document and handoff entry. Browser-safe. */
 import type { JsonValue } from '@earendil-works/chord/json'
+import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { ConversationId, EntryId, TaskId } from '@earendil-works/pi-durable'
 import { actionRef, docRef } from '../../shared/extension-api.ts'
 
@@ -14,8 +15,10 @@ export type VoiceSession = {
   startedAt?: number
   /** Every fork voice made, so the sidebar never lists them: voice shows as one live row while a session is open. */
   forks?: ConversationId[]
-  /** The model voice uses, `provider/model`, picked in the panel; unset, the default. */
+  /** The model the next session starts on, `provider/model`, as last picked in a voice prompt box; unset, the default. */
   model?: string
+  /** Its thinking level, likewise; unset, `low`. A model without it uses its closest level. */
+  thinking?: ModelThinkingLevel
 }
 
 /**
@@ -34,6 +37,8 @@ export type VoiceTurn = {
   route: VoiceRoute
   /** `followUp` when the user asked for it; a steer otherwise. */
   delivery?: VoiceDelivery
+  /** Sent without a command, as a complete answer to the question voice just asked. */
+  answered?: true
   hint?: string
   images?: number
 }
@@ -47,6 +52,10 @@ export type VoiceHandoff = {
   instruction: string
   attachments?: string[]
   images?: number
+  /** The user's own turns since the session started or last handed off, oldest first: the latest whole ones that fit. */
+  words?: string[]
+  /** How many earlier turns `words` leaves out. */
+  earlier?: number
   from: ConversationId
 }
 
@@ -81,26 +90,37 @@ export const VoiceSessionDoc = docRef<VoiceSession>('voice.session')
 export const VoiceForkDoc = docRef<VoiceFork>('voice.fork')
 
 /**
- * `{ audio: base64, mimeType }` → `{ audio }`, the id of the recording kept for the session's next turn. Opens the
- * session and starts the recording's durable transcription, which lands in the fork's `transcripts` or `failed`.
+ * `{ audio: base64, mimeType }` → `{ audio, session }`, the id of the recording kept for the session's next turn and
+ * that session. Opens the session and starts the recording's durable transcription, which lands in the fork's
+ * `transcripts` or `failed`. With `session`, it belongs to that session: refused when it is no longer the current one
+ * or was ended, and when it is current and handed off, the next session replaces it.
  */
 export const RecordAction = actionRef<
-  { audio: string; mimeType: string; collect?: { seconds: number; envelope?: number[] } },
-  { audio: string }
+  {
+    audio: string
+    mimeType: string
+    collect?: { seconds: number; envelope?: number[] }
+    session?: ConversationId
+  },
+  { audio: string; session: ConversationId }
 >('voice-live', 'record')
 
 /**
  * A turn: the transcript (or typed text), the recording it came from, images, and a hint about an interrupted reply.
  * Opens the session on its first turn. Returns the session's conversation and the route the turn takes; `dropped`
  * when its recording's transcript came back empty, so nothing was sent (a turn already sent is stopped instead).
+ * With `session`, it belongs to that session: refused when it is no longer the current one or was ended, and when it
+ * is current and handed off, the next session replaces it.
  */
 export const TurnAction = actionRef<
   {
+    session?: ConversationId
     key: string
     text: string
     audio?: string
     clips?: string[]
     delivery?: VoiceDelivery
+    answered?: true
     seconds?: number
     envelope?: number[]
     hint?: string
@@ -110,14 +130,14 @@ export const TurnAction = actionRef<
   { conversation: ConversationId; route: VoiceRoute; dropped?: true }
 >('voice-live', 'turn')
 
-/** `{ model: 'provider/model' }` → the voice model from now on, the open session's included. */
-export const ModelAction = actionRef<{ model: string }, Record<string, never>>(
-  'voice-live',
-  'model',
-)
-
 /** Open the session without a turn yet: forks @ultimate unless a session is open. Returns its conversation. */
 export const OpenAction = actionRef<null, { conversation: ConversationId }>('voice-live', 'open')
+
+/** The model or thinking level the next session starts on, picked in the cold prompt box; either may be left out. */
+export const PickAction = actionRef<
+  { model?: { provider: string; modelId: string }; thinkingLevel?: ModelThinkingLevel },
+  Record<string, never>
+>('voice-live', 'pick')
 
 /** Stop the session's current reply, for an interruption. */
 export const StopAction = actionRef<null, Record<string, never>>('voice-live', 'stop')
@@ -136,6 +156,8 @@ export const StatusAction = actionRef<
   null,
   {
     model: string
+    /** The thinking level it runs at, clamped to the model. */
+    thinking: ModelThinkingLevel
     route: VoiceRoute
     transcribes: boolean
     reason?: string
@@ -175,38 +197,17 @@ export const UiAnswerAction = actionRef<
   Record<string, never>
 >('voice-live', 'ui-answer')
 
-/** An OpenAI voice of the realtime speech model; cedar and marin sound best. */
-export type OpenAiVoice =
-  | 'cedar'
-  | 'marin'
-  | 'alloy'
-  | 'ash'
-  | 'ballad'
-  | 'coral'
-  | 'echo'
-  | 'sage'
-  | 'shimmer'
-  | 'verse'
-
-/**
- * `{ voice, text }` → `{ audio }`, the text read aloud by that OpenAI voice as base64 WAV; aborting the request cancels
- * it. Without text it only opens the connection, so the first sentence starts sooner.
- */
-export const SpeakAction = actionRef<{ voice: OpenAiVoice; text?: string }, { audio?: string }>(
-  'voice-live',
-  'speak',
-)
-
 /** Drop every collected recording that was not sent. */
 export const DiscardAction = actionRef<null, Record<string, never>>('voice-live', 'discard')
 
 /**
  * `{ audio }`, a collected recording with its transcript in → whether it ends the message with a spoken send ("send it",
  * "go", "follow up"): `send` with its delivery and the exact `clips` to send, `dropped` when the recording was only that
- * command and left the draft;
+ * command and left the draft; `answered` when it sends without a command, because the voice assistant's last reply
+ * ended with a question and the collected recordings answer it completely;
  * `unavailable` says why it cannot tell (no classifier key).
  */
 export const IntentAction = actionRef<
   { audio: string },
-  { send?: VoiceDelivery; clips?: string[]; dropped?: true; unavailable?: string }
+  { send?: VoiceDelivery; clips?: string[]; dropped?: true; answered?: true; unavailable?: string }
 >('voice-live', 'intent')

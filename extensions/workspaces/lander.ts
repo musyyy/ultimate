@@ -631,7 +631,10 @@ export function createLander(
                 ) {
                   await remote(path, signal, 'fetch', '-q', settings.push, target)
                   const fetched = await git(path, 'rev-parse', 'FETCH_HEAD')
-                  if (!(await contains(path, fetched, 'HEAD'))) {
+                  if (
+                    !(await contains(path, fetched, 'HEAD')) &&
+                    !(await contains(path, fetched, entry.tip))
+                  ) {
                     await step(`merging ${settings.push}/${target}`)
                     if (
                       await mergeOrReportConflict(

@@ -131,7 +131,9 @@ it("lists a root's newest landings, notes, branches and compactions, and compact
 
   // The branch started as an agent, and the compaction was announced once, after Pi's commit.
   const log = eventHost(() => server.harness, 'test').eventLog
-  expect((await log.recent({ events: [AgentStarted] })).map((event) => event.data)).toEqual([
+  // The source copy's resident project agents (like `guide`) start too; only the branch matters here.
+  const started = (await log.recent({ events: [AgentStarted] })).map((event) => event.data)
+  expect(started.filter((data) => data.kind !== 'standing')).toEqual([
     {
       id: branch,
       agent: 'branch',

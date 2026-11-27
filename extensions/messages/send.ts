@@ -7,7 +7,7 @@ import { AskedCalls, Messages, MessageSent } from './api.ts'
 import type { Message, Question } from './api.ts'
 import type { Judged, Via } from './refs.ts'
 import { checkQuestions, gist, openQuestion } from './questions.ts'
-import { isOwed } from '../../lib/message-state.ts'
+import { isOwed } from '../../lib/message-state.shared.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import type { Device } from '../../shared/events.ts'
 import { resolveImages } from './images.ts'
@@ -15,10 +15,11 @@ import type { ImagesRef } from './images.ts'
 import { append } from './log.ts'
 import { parentOf, resolveRecipient, senderName, serve, starterOf } from './addresses.ts'
 import { delivery } from './delivery.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 const AtomicallyCommittedCallReceipts = defineDoc<{ ids: Record<string, number> }>({
   kind: 'board.sent-calls',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'task',
   initial: () => ({ ids: {} }),
@@ -26,7 +27,7 @@ const AtomicallyCommittedCallReceipts = defineDoc<{ ids: Record<string, number> 
 
 const ConversationRequestReceipts = defineDoc<{ ids: Record<string, number> }>({
   kind: 'board.requests',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',

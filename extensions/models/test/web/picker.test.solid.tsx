@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { expectDistinctAgentNames } from '../../../../test/web/agent-names.ts'
 import { FakeSource, fakeSubscriptions } from '../../../../test/web/fake-source.ts'
 import { renderSolid } from '../../../../test/web/solid-dom-setup.ts'
-import { parseConversationId } from '../../../../lib/ids.ts'
+import { parseConversationId } from '../../../../lib/ids.shared.ts'
 import type { ConfigureRequest, ModelsResponse, StreamedView } from '../../../../shared/protocol.ts'
 
 const harness = vi.hoisted(() => ({
@@ -42,7 +42,7 @@ import { writerNow } from '../../../../web/src/sdk/writer.ts'
 import { LoginDialog } from '../../login.solid.tsx'
 import { ModelPicker } from '../../picker.solid.tsx'
 import { ModelControl, PickControl } from '../../toolbar.solid.tsx'
-import { openLogin } from '../../state.ts'
+import { openLogin } from '../../state.web.ts'
 import models from '../../web.solid.tsx'
 
 const agent = createAgent()

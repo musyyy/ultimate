@@ -19,7 +19,7 @@ import { providerKeyStandsIn } from '../../lib/openai.ts'
 import { readFamilyLayers } from '../../lib/families-settings.ts'
 import { isolatable } from '../../lib/git.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { meansNone } from '../../lib/errors.ts'
+import { meansNone } from '../../lib/errors.shared.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { readSecret, secretMetadata } from '../../lib/secrets.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -30,12 +30,13 @@ import { Standing } from '../subagents/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
 import { CheckAction } from './refs.ts'
 import type { SetupIssue } from './refs.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 const LOGIN = { label: 'Log in', command: 'auth.login' }
 
 const LastWarningsCommittedWithInput = defineDoc<{ key?: string }>({
   kind: 'setup.seen',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -79,7 +80,7 @@ async function summaryArea(host: AreaHost): Promise<SetupIssue | undefined> {
   if (!loggedIn(host)) return undefined
   const status = await host.need(ConversationsApi).summaryModelStatus()
   const fix = { label: 'Choose', command: 'conversations.summary-model' }
-  const uses = 'Titles, codemode step lines and question cards'
+  const uses = 'Titles, summaries, reply summaries and codemode step lines'
   if (status.problem === 'invalid')
     return {
       area: 'Summary model',
@@ -93,7 +94,7 @@ async function summaryArea(host: AreaHost): Promise<SetupIssue | undefined> {
       area: 'Summary model',
       status: 'warn',
       summary: `${status.configured}: no login here`,
-      impact: `${uses} are off: every message wakes the agent.`,
+      impact: `${uses} are off.`,
       fix,
     }
   const using = `${status.model!.provider}/${status.model!.id}`
@@ -242,7 +243,7 @@ function extensionsArea(host: AreaHost): SetupIssue | undefined {
     status: 'warn',
     summary: `${broken.map((extension) => extension.name).join(', ')} failed to load`,
     impact: broken[0].server!.error!.split('\n')[0],
-    fix: { label: 'Open', command: 'onboarding.extensions' },
+    fix: { label: 'Open', command: 'manager.open' },
   }
 }
 
@@ -293,7 +294,7 @@ async function projectArea(
     summary: "undecided: this project's .ultimate/ is not loaded",
     impact:
       'Its extensions, agents, skills and settings (worktree setup, lander checks) stay off until you choose to use it or keep global.',
-    fix: { label: 'Decide', command: 'onboarding.extensions' },
+    fix: { label: 'Decide', command: 'manager.open' },
   }
 }
 
@@ -473,28 +474,27 @@ export async function noteFor(
 }
 
 export default function setup(host: ExtensionHost) {
-  const cache = host.resource('setup.check', () => ({ at: 0, issues: [] as SetupIssue[] }))
+  const cache = host.resource('setup.check', () => ({
+    at: 0,
+    issues: undefined as SetupIssue[] | undefined,
+  }))
   const burstCheckCacheMs = 30_000
-  const current = async (tx: Tx) => {
-    if (Date.now() - cache.at > burstCheckCacheMs) {
-      cache.issues = await check(
-        host,
-        <T extends JsonObject>(doc: ConversationDocToken<T>, id: ConversationId) =>
-          tx.doc(doc, id) as Promise<Readonly<T>>,
-      )
-      cache.at = Date.now()
-    }
-    return cache.issues
-  }
   return defineExtension({
     name: 'setup',
     hooks: [
       hook(GenerationTask, {
+        prepareInput: async ({ conversationId }, ctx) => {
+          const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
+          if (standing?.ultimate !== conversationId) return
+          if (Date.now() - cache.at <= burstCheckCacheMs) return
+          cache.issues = await check(host).catch(meansNone)
+          cache.at = Date.now()
+        },
         // Pi upstream: @earendil-works/pi-durable@1.6.0 — patched transactional beforeInput hook.
         beforeInput: async function cachePreservingInputNote(_input, { tx, conversationId }) {
           const standing = await tx.doc(Standing, ROOT_CONVERSATION_ID)
           if (standing.ultimate !== conversationId) return undefined
-          return noteFor(tx, conversationId, await current(tx).catch(meansNone), Date.now())
+          return noteFor(tx, conversationId, cache.issues, Date.now())
         },
       }),
     ],

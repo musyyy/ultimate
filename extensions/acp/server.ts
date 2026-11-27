@@ -11,8 +11,8 @@ import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { implementAction } from '../../lib/actions.ts'
 import { defineEffect } from '../../lib/effect.ts'
-import { inProcess } from '../../lib/errors.ts'
-import { batch, deadline } from '../../lib/timers.ts'
+import { inProcess } from '../../lib/errors.shared.ts'
+import { batch, deadline } from '../../lib/timers.shared.ts'
 import { spawn, execFile } from '../../lib/spawn.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -102,11 +102,11 @@ export function makeClient(host: ExtensionHost) {
     })
   }
 
-  async function markOffline(tx: Tx, id: ConversationId) {
+  async function markOffline(tx: Tx, id: ConversationId, turnStarted = true) {
     const session = await tx.doc(Session, id)
     session.status = 'offline'
     delete session.permission
-    await settleTurn(tx, id)
+    if (turnStarted) await settleTurn(tx, id)
   }
 
   function cancelAgent(agent: Live) {
@@ -169,19 +169,21 @@ export function makeClient(host: ExtensionHost) {
       ;(await stop([...new Set([...live.keys(), ...prompts.keys()])]))[Symbol.dispose]()
     })
     const ids = await commit(async (tx) => {
-      const found: ConversationId[] = []
+      const all: ConversationId[] = []
       let cursor: Cursor | undefined
       do {
         const page = await tx.scanConversations({}, 256, cursor)
-        for (const { id } of page.items) {
-          const session = await tx.doc(Session, id)
-          if (session.status && session.status !== 'offline') found.push(id)
-        }
+        all.push(...page.items.map(({ id }) => id))
         cursor = page.next
       } while (cursor !== undefined)
-      return found
+      return all
     })
-    for (const id of ids) await commit((tx) => markOffline(tx, id))
+    for (const id of ids) {
+      const status = (await host.harness().snapshot(Session, id, context))?.status
+      if (!status || status === 'offline') continue
+      const turnStarted = (await host.harness().snapshot(Turn, id, context)) !== undefined
+      await commit((tx) => markOffline(tx, id, turnStarted))
+    }
     closed = false
   })
 
@@ -542,9 +544,8 @@ export default function acp(host: ExtensionHost) {
     tasks: [local.StopConcluded],
     hooks: [
       hook(GenerationTask, {
-        beforeInput: async (_input, { tx, conversationId }) => {
-          if ((await tx.doc(Session, conversationId)).status) throw new Error(ownInput)
-        },
+        refuseInput: async (_input, { tx, conversationId }) =>
+          (await tx.doc(Session, conversationId)).status ? ownInput : undefined,
       }),
     ],
   })

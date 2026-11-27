@@ -19,10 +19,10 @@ import {
   useSystem,
 } from '@/sdk/solid'
 import type { Usage } from '@/sdk/solid'
-import { lastAssistant, promptTokens } from '../../lib/context-usage.ts'
+import { lastAssistant, promptTokens } from '../../lib/context-usage.shared.ts'
 import { ContextDoc } from '../conversations/refs.ts'
 import { WorkspacesDoc } from '../workspaces/refs.ts'
-import { usageTotals } from './context.ts'
+import { usageTotals } from './context.shared.ts'
 import { RatesAction } from './refs.ts'
 import type { RateSample } from './refs.ts'
 

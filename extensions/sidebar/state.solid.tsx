@@ -18,7 +18,6 @@ import {
   type JsonValue,
 } from '@/sdk/solid'
 import type { ConversationSummary } from '../../shared/protocol.ts'
-import { useAutomations, timerWaits } from '../automations/ui.solid.tsx'
 import { OverviewDoc } from '../conversations/refs.ts'
 import { hiddenConversationIds } from '../conversations/ui.solid.tsx'
 import { RootsDoc } from '../lineage/refs.ts'
@@ -29,12 +28,13 @@ import {
   useRemoteProgress,
   useUnderway,
   waitLabel,
+  WaitTimers,
 } from '../messages/ui.solid.tsx'
 import { StandingDoc } from '../subagents/refs.ts'
 import { WorkspacesDoc } from '../workspaces/refs.ts'
 import type { Workspace, WorkspaceIndex } from '../workspaces/types.ts'
-import { topLevelRows } from './listed.ts'
-import { Unlisted } from './points.ts'
+import { topLevelRows } from './listed.web.ts'
+import { Unlisted } from './points.web.ts'
 
 export type SidebarConversation = ConversationSummary & { workspace?: Workspace }
 const emptyWorkspaces: WorkspaceIndex = {
@@ -90,8 +90,7 @@ export function useSidebarData() {
   const parked = (id: ConversationId) => (parkedRuns() ?? emptyParked).has(id)
   const exclusions = useAllProvided(Unlisted, ultimateId)
   const unlisted = createMemo(() => new Set(exclusions().flatMap((set) => [...set])))
-  const timersList = useAutomations(() => 5000)
-  const timers = createMemo(() => timerWaits(timersList().data, standingIds()))
+  const timers = useProvided(WaitTimers, () => null)
   const underway = useUnderway()
   const [concludedIds] = useSidebarState<number[]>('concluded', [])
   const [seen] = useSidebarState<Record<string, number>>('seen', {})

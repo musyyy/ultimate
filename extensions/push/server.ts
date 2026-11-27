@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineDoc, defineExtension, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Tx } from '@earendil-works/pi-durable'
 import { defineEffect } from '../../lib/effect.ts'
-import { rebuiltOnOpen } from '../../lib/errors.ts'
+import { rebuiltOnOpen } from '../../lib/errors.shared.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { onCommit } from '../../lib/commits.ts'
 import { readSecret } from '../../lib/secrets.ts'
@@ -25,12 +25,13 @@ import {
 import type { Subscription } from './refs.ts'
 import { failedPush, landingPush, questionPush } from './rules.ts'
 import type { Push } from './rules.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 const KEY = 'WEB_PUSH_VAPID_KEY'
 
 const ServerOnlySubscriptions = defineDoc<{ subscriptions: Subscription[] }>({
   kind: 'push.subscriptions',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -42,7 +43,7 @@ const CLOSED_TAG_HISTORY_LIMIT = 50
 const VISIBLE_BROWSER_GRACE_MS = 15_000
 const Closed = defineDoc<{ tags: string[] }>({
   kind: ClosedDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -51,7 +52,7 @@ const Closed = defineDoc<{ tags: string[] }>({
 })
 const LastFailureTag = defineDoc<{ tag?: string }>({
   kind: 'push.last-failure',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',

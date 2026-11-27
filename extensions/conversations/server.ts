@@ -1,4 +1,4 @@
-import { conversationIdentity, parseConversationId } from '../../lib/ids.ts'
+import { conversationIdentity, parseConversationId } from '../../lib/ids.shared.ts'
 import type { ConversationId, Cursor, Tx } from '@earendil-works/pi-durable'
 import { join } from 'node:path'
 import type { Context } from '@earendil-works/chord/context'
@@ -25,7 +25,7 @@ import {
   summaryHistory,
 } from './summary.ts'
 import { summaryModel, summaryModelSetting, summaryModelStatus } from './summary-model.ts'
-import { parseSummaryModel } from './summary-model-ref.ts'
+import { parseSummaryModel } from './summary-model-ref.shared.ts'
 import { implementAction } from '../../lib/actions.ts'
 import type { ActionInput } from '../../lib/actions.ts'
 import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
@@ -56,10 +56,11 @@ import {
   SummariesAction,
   SummaryModelAction,
 } from './refs.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 const Fixed = defineDoc<{ fixed?: true }>({
   kind: 'conversations.fixed',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -71,7 +72,7 @@ export const docs = [Summaries, Overview, Fixed, ContextUsageDoc, Marks]
 
 const IdentityAtContextHead = defineDoc<{ head?: number }>({
   kind: 'conversations.identity',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',

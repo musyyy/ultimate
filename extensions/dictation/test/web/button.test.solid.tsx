@@ -3,7 +3,7 @@ import { settle } from '@ui-sdk/core/testing'
 import { createAgent } from '@ui-sdk/solid/agent'
 import { createRoot, createSignal, flush } from 'solid-js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { parseConversationId } from '../../../../lib/ids.ts'
+import { parseConversationId } from '../../../../lib/ids.shared.ts'
 import type { StreamedView } from '../../../../shared/protocol.ts'
 import { expectDistinctAgentNames } from '../../../../test/web/agent-names.ts'
 import { FakeSource, fakeSubscriptions } from '../../../../test/web/fake-source.ts'
@@ -12,12 +12,12 @@ import { spliced } from '../../../../web/src/app/queued.ts'
 import { store as clientStore } from '../../../../web/src/sdk/client.ts'
 import { events } from '@/sdk/solid'
 import { VoiceButton } from '../../button.solid.tsx'
-import { capture } from '../../capture.ts'
+import { capture } from '../../capture.web.ts'
 import type { VoiceStatus } from '../../refs.ts'
-import { startCue, stopCue } from '../../../../lib/cues.ts'
+import { startCue, stopCue } from '../../../../lib/cues.web.ts'
 import { setSoundCues, setTalkMode, talkMode } from '../../routing.solid.tsx'
 
-vi.mock('../../../../lib/cues.ts', () => ({
+vi.mock('../../../../lib/cues.web.ts', () => ({
   startCue: vi.fn<() => void>(),
   stopCue: vi.fn<() => void>(),
 }))
@@ -26,6 +26,7 @@ const harness = vi.hoisted(() => ({
   sources: [] as FakeSource[],
   server: undefined as ReturnType<typeof fakeSubscriptions> | undefined,
   status: { available: true } as VoiceStatus,
+  settings: { talk: 'tap', shortcut: 'mod+shift+space', cues: true },
   transcribe: vi.fn<(request: unknown, source: string | null) => void>(),
 }))
 vi.mock('../../../../web/src/sdk/client.ts', async () => {
@@ -38,6 +39,12 @@ vi.mock('../../../../web/src/sdk/client.ts', async () => {
     const path = input as string
     if (path === '/api/extensions/dictation/actions/status')
       return Response.json({ result: harness.status })
+    if (path === '/api/extensions/dictation/actions/settings')
+      return Response.json({ result: harness.settings })
+    if (path === '/api/extensions/dictation/actions/setSettings') {
+      Object.assign(harness.settings, JSON.parse(init?.body as string).args)
+      return Response.json({ result: harness.settings })
+    }
     if (path === '/api/extensions/dictation/actions/transcribe') {
       harness.transcribe(
         JSON.parse(init?.body as string),

@@ -228,7 +228,7 @@ export interface UltimateContext extends UltimateActions {
 export interface CommandContribution {
   id: string
   title: string
-  /** Shortcut: `mod+shift+m`, or a sequence such as `mod+k m` (`mod` is ⌘ on macOS, Ctrl elsewhere). */
+  /** Shortcut: `mod+shift+m` (`mod` is ⌘ on macOS, Ctrl elsewhere). */
   keys?: string
   /** Palette group; defaults to the extension name. */
   group?: string
@@ -432,10 +432,14 @@ export const Dictation = definePoint<
   JSX.Element
 >('ultimate.dictation')
 /**
- * How the talk shortcut is pressed, gesture and keys (`dictation` provides it: `tap Ctrl+Shift+Space`), for the main
- * composer's placeholder. While nothing provides it, the placeholder leaves it out.
+ * How the talk shortcut is pressed, gesture and keys (`dictation` provides it: `{ gesture: 'tap', keys:
+ * 'Ctrl+Shift+Space' }`), for the main composer's placeholder; a phone names only the gesture. While nothing provides
+ * it, the placeholder leaves it out.
  */
-export const DictationShortcut = definePoint<null, string | undefined>('ultimate.dictationShortcut')
+export const DictationShortcut = definePoint<
+  null,
+  { gesture: 'hold' | 'tap'; keys: string } | undefined
+>('ultimate.dictationShortcut')
 /**
  * What a prompt box's record control gets, beside its attach button: `draft` is the box's draft key (boxes showing one
  * conversation share it; a box without one is keyed by its `name`, so give such boxes distinct names), `attach` adds recorded files to that box like a drop (as `source`, `recording` by default; a

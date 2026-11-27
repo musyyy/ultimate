@@ -1,7 +1,7 @@
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { api, errorMessage } from '@/sdk/solid'
 import { PrepareAction } from './refs.ts'
-import { splitReply } from './speech.ts'
+import { splitReply } from './speech.web.ts'
 import { speech } from './voice.solid.tsx'
 
 export type Reading = {
@@ -10,6 +10,7 @@ export type Reading = {
   conversation: ConversationId
   entry: number
   status: 'loading' | 'playing' | 'paused'
+  blocked?: boolean
   error?: string
 }
 
@@ -66,6 +67,7 @@ export function current(): Reading | undefined {
     conversation,
     entry,
     status: now.playing ? 'playing' : now.paused ? 'paused' : 'loading',
+    blocked: now.blocked,
   }
 }
 

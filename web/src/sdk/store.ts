@@ -1,9 +1,9 @@
-import { parseConversationId } from '../../../lib/ids.ts'
+import { parseConversationId } from '../../../lib/ids.shared.ts'
 import type { JsonObject, TaskGraph, ConversationId } from '@earendil-works/pi-durable'
 import { applyImmutable } from '@earendil-works/chord/delta'
-import { deadline, nextTurn, retryAfter } from '../../../lib/timers.ts'
-import { keepLast } from '../../../lib/errors.ts'
-import type { Cancel } from '../../../lib/timers.ts'
+import { deadline, nextTurn, retryAfter } from '../../../lib/timers.shared.ts'
+import { keepLast } from '../../../lib/errors.shared.ts'
+import type { Cancel } from '../../../lib/timers.shared.ts'
 import type { JsonValue } from '@earendil-works/chord/json'
 import { MAX_SUBSCRIPTION_BATCH_BYTES } from '../../../shared/protocol.ts'
 import type {
@@ -581,12 +581,7 @@ export function createStore(options: StoreOptions = {}) {
       return
     }
     const requested = state.requested
-    const requestedConversationNeverOpened =
-      key === `${shownKey()}:view` &&
-      status === 404 &&
-      requested !== undefined &&
-      (!state.view || state.restored)
-    if (requestedConversationNeverOpened) {
+    if (status === 404 && requested !== undefined && key === `${shownKey()}:view`) {
       retireShownUntilReconcile()
       recentViewsWithRawSnapshots.delete(requested)
       set({ requested: undefined, view: undefined, restored: false, docs: {} })

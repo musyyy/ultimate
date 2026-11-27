@@ -28,8 +28,8 @@ import {
 import { Diff, parsePatch } from '../coding-tools/ui.solid.tsx'
 import { DefinitionAction } from '../subagents/refs.ts'
 import { AgentMark } from '../conversations/ui.solid.tsx'
-import { modelLine } from './breakdown.ts'
-import type { Breakdown, Diff as ContextDiff, Section, Tool } from './breakdown.ts'
+import { modelLine } from './breakdown.shared.ts'
+import type { Breakdown, Diff as ContextDiff, Section, Tool } from './breakdown.shared.ts'
 
 export const signed = (delta: number) =>
   delta === 0 ? '±0' : `${delta > 0 ? '+' : '−'}${formatTokens(Math.abs(delta))}`
@@ -401,7 +401,7 @@ export function Header(props: {
   return (
     <Collapsible
       class={cn(
-        'group/context @container rounded-md border border-border/70 bg-card/40 font-mono text-[11.5px]',
+        'group/context @container rounded-md border border-border/70 bg-card/40 font-mono text-[11.5px] max-md:hidden',
         props.class,
       )}
       data-context-header={props.breakdown.start?.id ?? 'start'}

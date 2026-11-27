@@ -8,7 +8,6 @@ import {
   AgentDoc,
   defineDoc,
   defineExtension,
-  defineSignal,
   defineTool,
   GenerationTask,
   hook,
@@ -17,14 +16,15 @@ import {
   ToolTask,
 } from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { arr, lit, num, obj, opt, str, union, unknown } from '@earendil-works/pi-schema'
+import type { Context } from '@earendil-works/chord/context'
+import { arr, num, obj, opt, str } from '@earendil-works/pi-schema'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { defineEffect } from '../../lib/effect.ts'
 import { openaiSecretOrNonOAuthKey, openaiTranscribe } from '../../lib/openai.ts'
 import { readSecret } from '../../lib/secrets.ts'
-import { imagesOf, isInput } from '../../lib/entries.ts'
-import { offsetEntryId } from '../../lib/ids.ts'
+import { imagesOf, isInput } from '../../lib/entries.shared.ts'
+import { offsetEntryId } from '../../lib/ids.shared.ts'
 import { safeToRerun } from '../../lib/replay.ts'
 import {
   answerIncludingClosingToolResults,
@@ -37,8 +37,9 @@ import { ConversationsApi } from '../conversations/api.ts'
 import { Family } from '../models/api.ts'
 import { Branch } from '../lineage/api.ts'
 import { Standing } from '../subagents/api.ts'
+import { PageAgentPages } from '../page-agent/api.ts'
 import { VideoApi } from '../video/api.ts'
-import { VoiceHandoffEntry, VoiceTurnEntry } from './entries.ts'
+import { VoiceHandoffEntry, VoiceTurnEntry } from './entries.shared.ts'
 import {
   EndAction,
   RecordAction,
@@ -49,8 +50,6 @@ import {
   DiscardAction,
   IntentAction,
   TurnAction,
-  UiAnswerAction,
-  UiClaimAction,
 } from './refs.ts'
 import type {
   VoiceDelivery,
@@ -59,9 +58,9 @@ import type {
   VoiceRoute,
   VoiceSession,
   VoiceTurn,
-  VoiceUi,
 } from './refs.ts'
 import { voicePrompt } from './prompt.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 const DEFAULT_MODEL = { provider: 'claude-code', modelId: 'claude-opus-5-5' }
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -75,12 +74,12 @@ const VOICE_TOOLS = [
   'web_search',
   'web_fetch',
   'video_ask',
+  'bash',
   'codemode',
   'action',
   'ui',
   'voice_handoff',
 ]
-const UI_TIMEOUT_MS = 15_000
 const THINKING_LEVELS: readonly ModelThinkingLevel[] = [
   'off',
   'minimal',
@@ -91,22 +90,11 @@ const THINKING_LEVELS: readonly ModelThinkingLevel[] = [
   'max',
 ]
 
-export const userActions = [
-  'open',
-  'record',
-  'turn',
-  'pick',
-  'stop',
-  'end',
-  'ui-claim',
-  'ui-answer',
-  'discard',
-  'intent',
-]
+export const userActions = ['open', 'record', 'turn', 'pick', 'stop', 'end', 'discard', 'intent']
 
 export const Session = defineDoc<VoiceSession>({
   kind: 'voice.session',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -114,9 +102,18 @@ export const Session = defineDoc<VoiceSession>({
   initial: () => ({}),
 })
 
-export const Fork = defineDoc<VoiceFork & { seen?: EntryId; introduced?: true; ended?: true }>({
+type ModelSource = 'picked' | 'settings' | 'default'
+
+export const Fork = defineDoc<
+  VoiceFork & {
+    seen?: EntryId
+    introduced?: true
+    ended?: true
+    opened?: { model: string; source: ModelSource }
+  }
+>({
   kind: 'voice.fork',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -124,33 +121,29 @@ export const Fork = defineDoc<VoiceFork & { seen?: EntryId; introduced?: true; e
   initial: () => ({}),
 })
 
-export const Ui = defineDoc<VoiceUi>({
-  kind: 'voice.ui',
-  checkpointWhen: () => false,
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({ calls: [] }),
-})
-
-const UiAnswered = defineSignal({ name: 'voice-live.ui-answered', version: 1, schema: unknown() })
-
-export const docs = [Session, Fork, Ui]
+export const docs = [Session, Fork]
 
 export const hearsAudio = (model: { provider: string; modelId: string }) =>
   /gemini/i.test(model.modelId)
 
-async function voiceModel(host: ExtensionHost) {
-  const picked = (await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context))?.model
-  const settings = await readSettings(userSettingsPath(host.userHome))
-  const configured = picked ?? (settings.voice as { model?: unknown } | undefined)?.model
-  if (typeof configured === 'string' && configured.includes('/')) {
-    const [provider, ...rest] = configured.split('/')
-    return { provider, modelId: rest.join('/') }
-  }
-  return DEFAULT_MODEL
+const parseModel = (value: unknown) => {
+  if (typeof value !== 'string' || !value.includes('/')) return undefined
+  const [provider, ...rest] = value.split('/')
+  return { provider, modelId: rest.join('/') }
 }
+
+async function voiceModelSource(host: ExtensionHost) {
+  const picked = parseModel(
+    (await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context))?.model,
+  )
+  if (picked) return { model: picked, source: 'picked' as const }
+  const settings = await readSettings(userSettingsPath(host.userHome))
+  const configured = parseModel((settings.voice as { model?: unknown } | undefined)?.model)
+  if (configured) return { model: configured, source: 'settings' as const }
+  return { model: DEFAULT_MODEL, source: 'default' as const }
+}
+
+const SOURCE_LABEL = { picked: 'picked', settings: 'from settings', default: 'default' }
 
 const recordings = (host: ExtensionHost, session: ConversationId) =>
   join(host.home, 'voice', String(session))
@@ -241,7 +234,7 @@ async function checkBranch(
 ) {
   if (id !== screen)
     throw new Error(
-      `#${id} is not on Daniel's screen; send to the conversation he has open, or to @ultimate`,
+      `#${id} is not on the user's screen; send to the conversation they have open, or to @ultimate`,
     )
   if (!(await tx.conversation(id))) throw new Error(`#${id} does not exist`)
   if (!(await tx.doc(Branch, id)).branch)
@@ -250,11 +243,16 @@ async function checkBranch(
     throw new Error(`#${id} is concluded`)
 }
 
+const modelName = (model: { provider: string; modelId: string }) =>
+  `${model.provider}/${model.modelId}`
+
 function keepModel(
   session: VoiceSession,
+  fork: { opened?: { model: string } },
   agent: { model?: { provider: string; modelId: string }; thinkingLevel?: ModelThinkingLevel },
 ) {
-  if (agent.model) session.model = `${agent.model.provider}/${agent.model.modelId}`
+  if (agent.model && modelName(agent.model) !== fork.opened?.model)
+    session.model = modelName(agent.model)
   if (agent.thinkingLevel) session.thinking = agent.thinkingLevel
 }
 
@@ -277,25 +275,34 @@ async function openSession(host: ExtensionHost, expected?: ConversationId) {
   const main = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
   if (main === undefined) throw new Error('@ultimate is not available')
   const answer = await lastSettledInputAnswer(host, main, context)
-  const configured = await voiceModel(host)
+  const configured = await voiceModelSource(host)
   return host.harness().commit(async (tx) => {
     const session = await tx.doc(Session, ROOT_CONVERSATION_ID)
     const current = session.id === undefined ? undefined : await tx.doc(Fork, session.id)
     const open = current !== undefined && !current.ended
     if (expected !== undefined && (!open || session.id !== expected))
       throw new Error('This voice session ended; send again')
-    let model = configured
+    let model = configured.model
+    let source = configured.source
     if (open && !current.handedOff) return session.id!
     const at = await answerIncludingClosingToolResults(tx, main, answer)
     if (open) {
       current.ended = true
       const handedOff = await tx.doc(AgentDoc, session.id!)
-      keepModel(session, handedOff)
-      model = handedOff.model ?? configured
+      keepModel(session, current, handedOff)
+      if (handedOff.model) {
+        model = handedOff.model
+        source = modelName(model) === current.opened?.model ? current.opened.source : 'picked'
+      }
       await host.need(ConversationsApi).concludeIn(tx, [session.id!], 'user')
     }
     const fork = await tx.forkConversation(main, at, { ownership: { kind: 'ownerless' } })
-    Object.assign(await tx.doc(Fork, fork.id), { of: main, at, seen: at })
+    Object.assign(await tx.doc(Fork, fork.id), {
+      of: main,
+      at,
+      seen: at,
+      opened: { model: modelName(model), source },
+    })
     const agent = await tx.doc(AgentDoc, fork.id)
     agent.model = model
     agent.thinkingLevel = thinkingFor(host, model, session.thinking)
@@ -430,38 +437,56 @@ const unwrap = <T extends object>(args: unknown) =>
 export const actions = {
   status: implementAction(StatusAction, async (_args, { host }) => {
     const session = await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context)
+    const open = session?.id
     const agent =
-      session?.id === undefined
-        ? undefined
-        : await host.harness().snapshot(AgentDoc, session.id, context)
-    const model = agent?.model ?? (await voiceModel(host))
+      open === undefined ? undefined : await host.harness().snapshot(AgentDoc, open, context)
+    const opened =
+      open === undefined ? undefined : (await host.harness().snapshot(Fork, open, context))?.opened
+    const resolved = await voiceModelSource(host)
+    const model = agent?.model ?? resolved.model
+    const source: ModelSource = !agent?.model
+      ? resolved.source
+      : modelName(agent.model) === opened?.model
+        ? opened.source
+        : 'picked'
     const thinking = agent?.thinkingLevel ?? thinkingFor(host, model, session?.thinking)
-    const available = host.modelRuntime
-      .getAvailableSnapshot()
-      .some((listed) => listed.provider === model.provider && listed.id === model.modelId)
+    const removed = !host.modelRuntime.getModel(model.provider, model.modelId)
+    const available =
+      !removed &&
+      host.modelRuntime
+        .getAvailableSnapshot()
+        .some((listed) => listed.provider === model.provider && listed.id === model.modelId)
     const name = `${model.provider}/${model.modelId}`
+    const label = `${name} (${SOURCE_LABEL[source]})`
+    const problem = removed ? `${label}: model removed` : `${label} has no login`
+    const fix = {
+      picked: removed
+        ? 'Use the default, or pick another model in the prompt box below.'
+        : 'Log in to its provider, use the default, or pick another model in the prompt box below.',
+      settings: removed
+        ? 'Change voice.model in ~/.ultimate/settings.json, or pick another model in the prompt box below.'
+        : 'Log in to its provider, or pick another model in the prompt box below.',
+      default: 'Log in to its provider, or pick another model in the prompt box below.',
+    }[source]
     const transcribes = !!(await openaiSecretOrNonOAuthKey(host))
     const classifies =
       !!host.want(ClassifyApi) && !!(await readSecret(host.userHome, 'TYPESAFE_API_KEY'))
     return {
       model: name,
+      source,
       thinking,
       route: hearsAudio(model) ? ('audio' as const) : ('text' as const),
       transcribes,
-      ...(available ? {} : { reason: `${name} has no login` }),
+      ...(available ? {} : { reason: problem }),
       setup: {
         model: available
           ? {
               ready: true,
               detail: hearsAudio(model)
-                ? `${name}: hears your voice directly`
-                : `${name}: reads the transcript`,
+                ? `${label}: hears your voice directly`
+                : `${label}: reads the transcript`,
             }
-          : {
-              ready: false,
-              detail: `${name} has no login`,
-              fix: 'Log in to its provider, or pick another model in the prompt box below.',
-            },
+          : { ready: false, detail: problem, fix },
         transcription: transcribes
           ? {
               ready: true,
@@ -538,11 +563,12 @@ export const actions = {
     const { provider, modelId } = unwrap<{ provider: unknown; modelId: unknown }>(model)
     if (
       model !== undefined &&
+      model !== null &&
       (typeof provider !== 'string' ||
         typeof modelId !== 'string' ||
         !host.modelRuntime.getModel(provider, modelId))
     )
-      throw new Error('Expected model as a known { provider, modelId }')
+      throw new Error('Expected model as a known { provider, modelId }, or null for the default')
     if (thinkingLevel !== undefined && !THINKING_LEVELS.includes(thinkingLevel as never))
       throw new Error(`Expected thinkingLevel as one of ${THINKING_LEVELS.join(', ')}`)
     await host.harness().commit(async (tx) => {
@@ -551,7 +577,8 @@ export const actions = {
         throw new Error('A voice session is open: pick its model in its own prompt box')
       const picked = () => `${session.model ?? ''}:${session.thinking ?? ''}`
       const previous = picked()
-      if (model !== undefined) session.model = `${provider as string}/${modelId as string}`
+      if (model === null) delete session.model
+      else if (model !== undefined) session.model = `${provider as string}/${modelId as string}`
       if (thinkingLevel !== undefined) session.thinking = thinkingLevel as ModelThinkingLevel
       await action.uiChanged(tx, { key: 'voice-live.pick', value: picked(), previous })
     }, context)
@@ -572,6 +599,7 @@ export const actions = {
       envelope,
       hint,
       screen,
+      page,
       images,
       session: expected,
     } = unwrap<{
@@ -586,6 +614,7 @@ export const actions = {
       envelope: unknown
       hint: unknown
       screen: unknown
+      page: unknown
       images: unknown
     }>(args)
     if (typeof key !== 'string' || !key) throw new Error('Expected a turn key')
@@ -631,13 +660,14 @@ export const actions = {
       ...(levels?.length ? { envelope: levels } : {}),
       ...(typeof hint === 'string' && hint.trim() ? { hint: hint.trim() } : {}),
       ...(pictures.length ? { images: pictures.length } : {}),
+      ...(typeof page === 'string' && page ? { page } : {}),
     }
     const words =
       typeof audio === 'string'
         ? route === 'audio'
-          ? `Daniel, by voice (his recording follows): ${PLACEHOLDER}${data.text ? `\n\nAnd typed: ${data.text}` : ''}`
-          : `Daniel, by voice (transcribed): ${data.text || PLACEHOLDER}`
-        : `Daniel, typed: ${data.text}`
+          ? `The user, by voice (their recording follows): ${PLACEHOLDER}${data.text ? `\n\nAnd typed: ${data.text}` : ''}`
+          : `The user, by voice (transcribed): ${data.text || PLACEHOLDER}`
+        : `The user, typed: ${data.text}`
     const content = [
       ...(data.hint ? [{ type: 'text' as const, text: data.hint }] : []),
       { type: 'text' as const, text: words },
@@ -785,35 +815,6 @@ export const actions = {
       ...(only ? { dropped: true as const } : {}),
     }
   }),
-  'ui-claim': implementAction(UiClaimAction, async (args, { host }) => {
-    const { id, page } = unwrap<{ id: unknown; page: unknown }>(args)
-    if (typeof id !== 'string' || typeof page !== 'string' || !page)
-      throw new Error('Expected { id, page }')
-    const session = (await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context))?.id
-    if (session === undefined) return { claimed: false }
-    return host.harness().commit(async (tx) => {
-      const ui = await tx.doc(Ui, session)
-      const call = ui.calls.find((each) => each.id === id)
-      if (!call || call.page || Date.now() - call.at > UI_TIMEOUT_MS) return { claimed: false }
-      call.page = page
-      return { claimed: true }
-    }, context)
-  }),
-  'ui-answer': implementAction(UiAnswerAction, async (args, { host }) => {
-    const { id, page, result } = unwrap<{ id: unknown; page: unknown; result: unknown }>(args)
-    if (typeof id !== 'string' || typeof page !== 'string')
-      throw new Error('Expected { id, page, result }')
-    const session = (await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context))?.id
-    if (session === undefined) return {}
-    await host.harness().commit(async (tx) => {
-      const ui = await tx.doc(Ui, session)
-      const call = ui.calls.find((each) => each.id === id)
-      if (!call || call.page !== page) return
-      await tx.signal(call.task, UiAnswered, id, result ?? null)
-    }, context)
-    host.harness().resume()
-    return {}
-  }),
   stop: implementAction(StopAction, async (_args, { host }) => {
     const id = (await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context))?.id
     if (id !== undefined) await (await host.harness().conversation(id, context))?.abort(context)
@@ -827,7 +828,7 @@ export const actions = {
       const fork = await tx.doc(Fork, ending)
       fork.ended = true
       delete fork.draft
-      keepModel(session, await tx.doc(AgentDoc, ending))
+      keepModel(session, fork, await tx.doc(AgentDoc, ending))
       delete session.id
       delete session.of
       delete session.at
@@ -884,17 +885,30 @@ async function voiceRequest(
   return changed ? result : undefined
 }
 
+async function pageOfLatestTurn(host: ExtensionHost, id: ConversationId, ctx: Context) {
+  const conversation = await host.harness().conversation(id, ctx)
+  let cursor: Cursor | undefined
+  do {
+    const page = await conversation?.entries({ order: 'descending' }, 100, cursor, ctx)
+    for (const entry of page?.items ?? []) if (VoiceTurnEntry.is(entry)) return entry.data.page
+    cursor = page?.next
+  } while (cursor)
+  return undefined
+}
+
 export default function voiceExtension(host: ExtensionHost) {
   host.need(ConversationsApi)
+  host.implement(PageAgentPages, { pageFor: (id, ctx) => pageOfLatestTurn(host, id, ctx) })
   return defineExtension({
     name: 'voice-live',
     tasks: [transcribe(host)],
     hooks: [
       hook(GenerationTask, {
+        refuseInput: async (_input, { tx, conversationId }) =>
+          (await tx.doc(Fork, conversationId)).ended ? 'This voice session has ended' : undefined,
         beforeInput: async (_input, { tx, conversationId }) => {
           const fork = await tx.doc(Fork, conversationId)
-          if (fork.of === undefined) return undefined
-          if (fork.ended) throw new Error('This voice session has ended')
+          if (fork.of === undefined || fork.ended) return undefined
           const entries = []
           const seen = fork.seen ?? fork.at!
           if (!fork.introduced) {
@@ -952,87 +966,20 @@ export default function voiceExtension(host: ExtensionHost) {
           if (fork.ended) return { block: 'This voice session has ended' }
           if (VOICE_TOOLS.includes(call.name)) return undefined
           return {
-            block: `Voice mode reads, drives the UI and hands off: ${call.name} is blocked. Use voice_handoff to ask @ultimate to do it.`,
+            block: `Voice mode reads, runs commands, drives the UI and hands off: ${call.name} is blocked. Use voice_handoff to ask @ultimate to do it.`,
           }
         },
       }),
     ],
     tools: [
       defineTool({
-        name: 'ui',
-        description:
-          "Drive Daniel's own Ultimate page through its ui-sdk agent bridge: `snapshot` lists the controls on screen with their state, `query` finds controls by label or row text (`text`, optional `within` a list, `kind`), `act` runs steps in order as the agent ([{ref, action, args?}], ref is a label or a ref from query, like {ref: 'System', action: 'press'} to switch surface). Each change is recorded as made by an agent. Say in one short line what you are about to do before calling it.",
-        parameters: union([
-          obj({ op: lit('snapshot') }),
-          obj({ op: lit('query'), text: opt(str()), within: opt(str()), kind: opt(str()) }),
-          obj({
-            op: lit('act'),
-            steps: arr(
-              obj({
-                ref: str({ minLength: 1 }),
-                action: str({ minLength: 1 }),
-                args: opt(arr(unknown())),
-              }),
-            ),
-          }),
-        ]),
-        ...safeToRerun(
-          'The request is recorded once per tool call; a rerun finds it or its answer.',
-        ),
-        async execute(args, api, ctx) {
-          const id = api.callId
-          const answered = await api.readSignal(UiAnswered, id, ctx)
-          if (answered && 'value' in answered) {
-            await api.commit(async (tx) => {
-              const ui = await tx.doc(Ui, api.conversationId)
-              ui.calls = ui.calls.filter((call) => call.id !== id)
-            }, ctx)
-            return { output: [{ type: 'text', text: JSON.stringify(answered.value) }] }
-          }
-          if (answered || api.wake?.reason === 'time') {
-            const claimed = await api.commit(async (tx) => {
-              const ui = await tx.doc(Ui, api.conversationId)
-              const call = ui.calls.find((each) => each.id === id)
-              ui.calls = ui.calls.filter((each) => each.id !== id)
-              return !!call?.page
-            }, ctx)
-            return {
-              isError: true,
-              output: [
-                {
-                  type: 'text',
-                  text: claimed
-                    ? "Daniel's page took the request but did not answer in time: it may or may not have run. Look before repeating it."
-                    : "Daniel's page did not answer: the voice panel must be open in his browser.",
-                },
-              ],
-            }
-          }
-          const { op, ...input } = args as { op: 'snapshot' | 'query' | 'act' }
-          await api.commit(async (tx) => {
-            const ui = await tx.doc(Ui, api.conversationId)
-            if (!ui.calls.some((call) => call.id === id))
-              ui.calls = [...ui.calls, { id, task: api.taskId, op, input, at: api.now() }]
-          }, ctx)
-          return {
-            sleep: { until: api.now() + UI_TIMEOUT_MS, signals: [UiAnswered.key(id)] },
-          }
-        },
-        async cancel(_args, api, ctx) {
-          await api.commit(async (tx) => {
-            const ui = await tx.doc(Ui, api.conversationId)
-            ui.calls = ui.calls.filter((call) => call.id !== api.callId)
-          }, ctx)
-        },
-      }),
-      defineTool({
         name: 'voice_handoff',
         deferred: true,
         description:
-          "Hand the agreed outcome of this voice conversation to the main @ultimate as a message it acts on, or with `to` to the branch conversation on Daniel's screen (its coordinator), which a busy coordinator reads after its current tool round. Write it the way you would brief yourself.",
+          "Hand the agreed outcome of this voice conversation to the main @ultimate as a message it acts on, or with `to` to the branch conversation on the user's screen (its coordinator), which a busy coordinator reads after its current tool round. Write it the way you would brief yourself.",
         parameters: obj({
           to: opt(
-            num({ description: "A branch conversation on Daniel's screen; omit for @ultimate" }),
+            num({ description: "A branch conversation on the user's screen; omit for @ultimate" }),
           ),
           title: str({ minLength: 1 }),
           outcome: str({ minLength: 1 }),
@@ -1050,18 +997,18 @@ export default function voiceExtension(host: ExtensionHost) {
           const target = branch ?? fork.of
           const handoff: VoiceHandoff = { ...brief, from: api.conversationId }
           const lines = [
-            `Handoff from voice mode (#${api.conversationId}, a fork of @ultimate where Daniel talked it through): ${args.title}`,
+            `Handoff from voice mode (#${api.conversationId}, a fork of @ultimate where the user talked it through): ${args.title}`,
             `Outcome: ${args.outcome}`,
             ...(args.decided?.length ? ['Decided:', ...args.decided.map((d) => `- ${d}`)] : []),
             ...(args.open?.length ? ['Open:', ...args.open.map((o) => `- ${o}`)] : []),
             ...(args.attachments?.length
-              ? ['Screenshots he shared:', ...args.attachments.map((a) => `- ${a}`)]
+              ? ['Screenshots they shared:', ...args.attachments.map((a) => `- ${a}`)]
               : []),
             `Instruction: ${args.instruction}`,
           ]
           const quoted = (words: string[], earlier: number) => [
             '',
-            `Daniel's words in voice mode, oldest first${earlier ? ` (${earlier} earlier turns left out)` : ''}:`,
+            `The user's words in voice mode, oldest first${earlier ? ` (${earlier} earlier turns left out)` : ''}:`,
             ...words.map((said) => `> ${said.replaceAll('\n', '\n> ')}`),
           ]
           const receiver = await host.harness().conversation(target, ctx)

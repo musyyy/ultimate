@@ -3,8 +3,8 @@ import { For, Show } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
 import { Fold, events } from '@/sdk/solid'
 import type { SolidEntryProps } from '@/sdk/solid'
-import { commentCount, location, shortSpec } from './comments.ts'
-import { ReviewCommentsEntry } from './entries.ts'
+import { commentCount, location, shortSpec } from './comments.shared.ts'
+import { ReviewCommentsEntry } from './entries.shared.ts'
 import type { ReviewComment, ReviewComments } from './types.ts'
 
 const ownScheme = (spec: string) => {

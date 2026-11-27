@@ -2,7 +2,7 @@ import {
   answerIncludingClosingToolResults,
   lastSettledInputAnswer,
 } from '../../lib/settled-answer.ts'
-import { parseConversationId, offsetEntryId } from '../../lib/ids.ts'
+import { parseConversationId, offsetEntryId } from '../../lib/ids.shared.ts'
 import type { ConversationId, Cursor, TaskId, Tx } from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import {
@@ -22,7 +22,7 @@ import { safeToRerun } from '../../lib/replay.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { Device } from '../../shared/events.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { openQuestion } from '../../lib/message-state.ts'
+import { openQuestion } from '../../lib/message-state.shared.ts'
 import { checkReply, replyText } from '../../lib/question-answers.ts'
 import {
   cardKey,
@@ -33,8 +33,8 @@ import {
   keyOf,
   position,
   questionIndex,
-} from '../../lib/question-cards.ts'
-import type { CardQuestion, CardState } from '../../lib/question-cards.ts'
+} from '../../lib/question-cards.shared.ts'
+import type { CardQuestion, CardState } from '../../lib/question-cards.shared.ts'
 import type { Reply } from '../../lib/question-answers.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { Messages, MessagesApi } from '../messages/api.ts'
@@ -50,11 +50,12 @@ import {
   SideChatsDoc,
 } from './refs.ts'
 import type { QuestionSide, SideChat, SideChatIndex, SideChatSummary } from './refs.ts'
-import { SideChatSummaryEntry } from './entries.ts'
+import { SideChatSummaryEntry } from './entries.shared.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 export const Side = defineDoc<Partial<SideChat>>({
   kind: SideChatDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -63,7 +64,7 @@ export const Side = defineDoc<Partial<SideChat>>({
 })
 export const Index = defineDoc<SideChatIndex>({
   kind: SideChatsDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -72,7 +73,7 @@ export const Index = defineDoc<SideChatIndex>({
 })
 const Ending = defineDoc<{ mode?: 'discarded' | 'injected'; task?: TaskId; introduced?: boolean }>({
   kind: 'sidechat.ending',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -81,7 +82,7 @@ const Ending = defineDoc<{ mode?: 'discarded' | 'injected'; task?: TaskId; intro
 })
 export const QuestionSides = defineDoc<{ sides: QuestionSide[] }>({
   kind: QuestionSidesDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -431,7 +432,7 @@ async function openOnQuestion(host: ExtensionHost, messageId: number) {
 
 const DraftReceipts = defineDoc<{ calls: string[] }>({
   kind: 'sidechat.draft-receipts',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'task',
   initial: () => ({ calls: [] }),
@@ -568,7 +569,18 @@ const readOnlyCall = (name: string) => readOnlyTools.includes(name)
 export function tracksEffect(name: string, args: Record<string, unknown>) {
   if (name === 'todo') return args.action === 'add' || args.action === 'done'
   if (name === 'automation') return !['list', 'runs', 'log'].includes(String(args.action))
-  return ['branch', 'message', 'note', 'notify', 'setup', 'restart', 'edit', 'write'].includes(name)
+  if (name === 'mcp') return !!args.tool
+  return [
+    'branch',
+    'message',
+    'note',
+    'notify',
+    'setup',
+    'restart',
+    'edit',
+    'write',
+    'action',
+  ].includes(name)
 }
 
 export function questionReminder(
@@ -607,7 +619,7 @@ export function sideReminder(side: ConversationId, main: number, at: Date) {
   return [
     `You are in a side chat (#${side}): a temporary copy of @ultimate (#${main}), forked at ${at.toTimeString().slice(0, 5)}. Main keeps running without you.`,
     'It is for quick lookups and small side tasks. Answer here, in place.',
-    'Persistent actions (branch, message, note, notify, todo, automation changes, setup, restart, edit, write) remove Discard for good and count as main’s, so their replies land in main. Use them only when the user clearly wants a lasting change.',
+    'Persistent actions (branch, message, note, notify, todo, automation changes, setup, restart, edit, write, extension actions, MCP tool calls) remove Discard for good. Use them only when the user clearly wants a lasting change. Replies to messages, branch reports and notifications land in main.',
     'When the user is done, they choose Discard or Summarize & inject. There is no side chat inside a side chat.',
   ].join('\n')
 }
@@ -619,12 +631,18 @@ export default (host: ExtensionHost) =>
     tools: [draftAnswersTool(host)],
     hooks: [
       hook(GenerationTask, {
+        refuseInput: async (_input, { tx, conversationId }) => {
+          const side = await tx.doc(Side, conversationId)
+          if (side.of === undefined) return undefined
+          return side.ended || (await tx.doc(Ending, conversationId)).mode
+            ? `Side chat #${conversationId} has ended`
+            : undefined
+        },
         beforeInput: async (_input, { tx, conversationId }) => {
           const side = await tx.doc(Side, conversationId)
           if (side.of === undefined) return undefined
           const ending = await tx.doc(Ending, conversationId)
-          if (side.ended || ending.mode) throw new Error(`Side chat #${conversationId} has ended`)
-          if (ending.introduced) return undefined
+          if (side.ended || ending.mode || ending.introduced) return undefined
           ending.introduced = true
           return {
             entries: [

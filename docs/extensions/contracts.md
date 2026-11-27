@@ -66,7 +66,7 @@ whose documents or actions the browser uses describes them in `refs.ts`: `docRef
 `api-file-shape` holds it to the same documentation as `api.ts`: every action ref names its arguments and result,
 since agents read it before `tools.action`. It stays browser-safe: runtime imports of `shared/` and Pi Durable's
 `defineEntry` only, types only from packages, `shared/` and
-extensions' `refs.ts` or `types.ts`, and `tsconfig.web.json` type-checks it with the web.
+extensions' `refs.ts`, `types.ts` or `types.shared.ts`.
 
 ```ts
 /** Echo in the browser: the echo log, the action that echoes and its event. Browser-safe. */
@@ -125,7 +125,7 @@ The web core declares its own points in the SDK: `ParkedRuns`
 (pause), `RunStart` (tasks), `ConversationKind` (the title bar's kind before a title; messages names coordinator
 branches `branch · coordinator`), `ComposerPlaceholder` (what an empty composer says, the last provider that answers
 winning; conversations addresses a standing agent by its definition's `title`), `DictationShortcut` (how the talk
-shortcut is pressed, which the core's placeholder names; dictation provides it), `EmptyTranscript` (what a transcript
+shortcut is pressed, gesture and keys, which the core's placeholder names, only the gesture on a phone; dictation provides it), `EmptyTranscript` (what a transcript
 shows before its first message; each provider receives `core`, the rendering so far, to keep, wrap or replace;
 conversations shows a standing agent's mark and title), `AnswerSpeaker` (who speaks a final answer, in place of the
 core's "Final answer" heading; messages shows a standing agent's mark and title, else the conversation's model family) and

@@ -20,20 +20,21 @@ import type { AssistantMessage, Message } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { conversationIdentity } from '../../lib/ids.ts'
+import { conversationIdentity } from '../../lib/ids.shared.ts'
 import { onCommit } from '../../lib/commits.ts'
-import { rebuiltOnOpen } from '../../lib/errors.ts'
+import { rebuiltOnOpen } from '../../lib/errors.shared.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { PauseApi } from '../pause/api.ts'
 import { Standing } from '../subagents/api.ts'
-import { due, LEAD, TTL } from './due.ts'
+import { due, LEAD, TTL } from './due.shared.ts'
 import { SetAction, StateAction, WarmDoc } from './refs.ts'
 import type { Ping, WarmDocState, WarmState } from './refs.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 const State = defineDoc<WarmDocState>({
   kind: WarmDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',

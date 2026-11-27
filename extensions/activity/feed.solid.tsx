@@ -4,14 +4,14 @@ import type { JSX } from '@solidjs/web'
 import { For, Show, createMemo } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
 import { cn, events, formatAgo, showSurface, switchConversation } from '@/sdk/solid'
-import { compareUrl } from '../../lib/compare.ts'
+import { compareUrl } from '../../lib/compare.shared.ts'
 import { NoticeEvent } from '../../shared/events.ts'
 import type { EventData, EventRecord } from '../../shared/events.ts'
 import { ConversationRef, FeatureTag } from '../conversations/ui.solid.tsx'
 import { Branched, Rooted } from '../lineage/refs.ts'
 import { CheckRan, SubmissionLanded } from '../workspaces/refs.ts'
 import { CommitCount, useGithubRepo } from '../workspaces/ui.solid.tsx'
-import { Backup, Escalation, activityRules } from './events.ts'
+import { Backup, Escalation, activityRules } from './events.web.ts'
 
 export const { filters, shows, tone } = activityRules({
   landed: SubmissionLanded,

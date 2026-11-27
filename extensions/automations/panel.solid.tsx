@@ -14,7 +14,7 @@ import {
 } from '@/sdk/solid'
 import { AutomationForm } from './form.solid.tsx'
 import { useAutomations, useRunSignature, useShown } from './live.solid.tsx'
-import { attention, lookOf, looks, worstFirst } from './looks.ts'
+import { attention, lookOf, looks, worstFirst } from './looks.web.ts'
 import { Heading } from './parts.solid.tsx'
 import { AutomationRow } from './row.solid.tsx'
 import { ScriptDetail } from './script.solid.tsx'
@@ -113,7 +113,7 @@ export function AutomationsPanel() {
                 <Show
                   when={
                     /subagents/.test(listError()) &&
-                    commands().some((command) => command.id === 'onboarding.extensions')
+                    commands().some((command) => command.id === 'manager.open')
                   }
                 >
                   <Button

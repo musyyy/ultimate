@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest'
-import { parseConversationId } from '../../../../lib/ids.ts'
+import { parseConversationId } from '../../../../lib/ids.shared.ts'
 import { capture } from '../../../dictation/ui.solid.tsx'
 import {
   composeIn,
@@ -14,6 +14,8 @@ const actions = vi.hoisted(() => [] as string[])
 vi.mock('@/sdk/solid', async () => {
   const { createSignal } = await import('solid-js')
   return {
+    writerNow: () => 'person',
+    writingAs: <T,>(_who: unknown, write: () => T) => write(),
     api: {
       action: (ref: { name: string }) => {
         actions.push(ref.name)
@@ -30,6 +32,8 @@ vi.mock('@/sdk/solid', async () => {
     }),
     errorMessage: String,
     useConversation: () => () => ({ entries: [], live: {}, busy: false }),
+    ROOT: 1,
+    useAction: () => ({ data: () => undefined, refetch: async () => undefined }),
     useUiState: (key: string, initial: unknown) =>
       createSignal<unknown>(key === 'ext.voice-live.cues' ? false : initial),
   }

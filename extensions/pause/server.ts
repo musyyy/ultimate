@@ -1,18 +1,18 @@
-import { parseConversationId } from '../../lib/ids.ts'
+import { parseConversationId } from '../../lib/ids.shared.ts'
 import type { ConversationId, Cursor, SubmissionId } from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { onCommit } from '../../lib/commits.ts'
 import { defineDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { rebuiltOnOpen, inProcess, settled } from '../../lib/errors.ts'
-import { deadline } from '../../lib/timers.ts'
-import type { Cancel } from '../../lib/timers.ts'
+import { rebuiltOnOpen, inProcess, settled } from '../../lib/errors.shared.ts'
+import { deadline } from '../../lib/timers.shared.ts'
+import type { Cancel } from '../../lib/timers.shared.ts'
 import { rateLimited } from '../../lib/rate-limit.ts'
 import { Standing } from '../subagents/api.ts'
 import { PauseApi } from './api.ts'
-import { formatDuration } from '../../lib/format.ts'
-import { autoPlayMinutes } from './autoplay.ts'
+import { formatDuration } from '../../lib/format.shared.ts'
+import { autoPlayMinutes } from './autoplay.shared.ts'
 import { AutoPlayAction, PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
 import type {
   AutoPlayed,
@@ -23,10 +23,11 @@ import type {
   RateLimit,
   RunningTask,
 } from './refs.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 const State = defineDoc<PauseDocState>({
   kind: PauseDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -246,8 +247,9 @@ async function holdRetryOrRelease(host: Host, limit: RateLimit) {
   try {
     await holdAndRecordPause(host, limit)
   } catch (error) {
-    sharedPauseFlag(host).paused = false
-    host.harness().release()
+    const { paused } = await read(host)
+    sharedPauseFlag(host).paused = paused
+    if (!paused) host.harness().release()
     throw error
   }
   await writePauseLimitOnce(host, await read(host))

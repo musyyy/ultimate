@@ -117,6 +117,7 @@ const membersOf = (declaration: Node): Node[] =>
 const repositoryPath = (filename: string) =>
   path.relative(process.cwd(), filename).split(path.sep).join('/')
 const solidFile = (filename: string) => filename.endsWith('.solid.tsx')
+const runsInBrowser = (filename: string) => /\.(tsx|web\.ts|shared\.ts)$/.test(filename)
 const bridgeFile = 'web/src/sdk/contribution.solid.tsx'
 const sdkEntries = ['web/src/sdk/solid.ts']
 const uiKitFile = (filename: string) =>
@@ -649,7 +650,7 @@ export default {
       meta: { schema: [] },
       create(context: Context) {
         const message =
-          'A timer guesses when something has happened, so it is slow when it waits too long and wrong when it waits too little: react to the event, document, observer or AbortSignal that says so. When time itself is the reason, use the helper from lib/timers.ts that names it (debounce, batch, deadline, within, retryAfter, every, pace, nextTurn).'
+          'A timer guesses when something has happened, so it is slow when it waits too long and wrong when it waits too little: react to the event, document, observer or AbortSignal that says so. When time itself is the reason, use the helper from lib/timers.shared.ts that names it (debounce, batch, deadline, within, retryAfter, every, pace, nextTurn).'
         const imported = (node: Node) => {
           if (/^(node:)?timers(\/promises)?$/.test(String(node.source?.value)))
             context.report({ node, message })
@@ -689,7 +690,7 @@ export default {
             context.report({
               node,
               message:
-                "test/helpers.ts imports the server, and a web test is type-checked by tsconfig.web.json, which then fails as 'Invalid tsconfig'. Use the browser-safe helpers in test/web (solid-dom-setup.ts, fake-source.ts, agent-names.ts) and vi.advanceTimersByTimeAsync or settle() instead of until.",
+                'test/helpers.ts brings the whole server and real-time waits into a page test, which then runs slow and reaches what a page never could. Use the browser-safe helpers in test/web (solid-dom-setup.ts, fake-source.ts, agent-names.ts) and vi.advanceTimersByTimeAsync or settle() instead of until.',
             })
         }
         return { ImportDeclaration: check, ImportExpression: check }
@@ -751,7 +752,7 @@ export default {
       meta: { schema: [] },
       create(context: Context) {
         const message =
-          'Work started and not awaited is lost on a crash and never retried: create it as a task in the commit that decides it (defineEffect from lib/effect.ts), or await it. Name the two exceptions from lib/errors.ts: rebuiltOnOpen(why, work) when open derives it again (a projection, a cache, a sweep), inProcess(why, work) when it belongs to this process only (a request, a stream, a child process, shutdown).'
+          'Work started and not awaited is lost on a crash and never retried: create it as a task in the commit that decides it (defineEffect from lib/effect.ts), or await it. Name the two exceptions from lib/errors.shared.ts: rebuiltOnOpen(why, work) when open derives it again (a projection, a cache, a sweep), inProcess(why, work) when it belongs to this process only (a request, a stream, a child process, shutdown).'
         const unowned = (node: Node | undefined): boolean => {
           if (node?.type === 'UnaryExpression' && node.operator === 'void')
             return node.argument?.type === 'CallExpression'
@@ -776,7 +777,7 @@ export default {
           context.report({
             node,
             message:
-              'A swallowed error hides a bug where nobody looks: handle it, or let it go by name from lib/errors.ts (ignoring(isMissing), meansNone, overshadowed, settled; keepLast for a read in the browser).',
+              'A swallowed error hides a bug where nobody looks: handle it, or let it go by name from lib/errors.shared.ts (ignoring(isMissing), meansNone, overshadowed, settled; keepLast for a read in the browser).',
           })
         const empty = (fn: Node | undefined) => {
           if (!fn || !['ArrowFunctionExpression', 'FunctionExpression'].includes(fn.type))
@@ -815,12 +816,42 @@ export default {
         }
       },
     },
+    'browser-file-names': {
+      meta: { schema: [] },
+      create(context: Context) {
+        const check = (node: ImportNode) => {
+          const source = node.source?.value
+          if (typeof source !== 'string' || !source.startsWith('.')) return
+          if (!['', '.ts'].includes(path.extname(source))) return
+          if (node.importKind === 'type' || node.exportKind === 'type') return
+          const target = resolved(context.filename, source)
+          const [directory] = target[0] === '.ultimate' ? target.slice(1) : target
+          const file = target.at(-1) ?? ''
+          if (
+            !['extensions', 'lib'].includes(directory) ||
+            /\.(web|shared)\.ts$/.test(file) ||
+            file === 'refs.ts'
+          )
+            return
+          context.report({
+            node,
+            message: `Lint and the build tell browser code from server code by its file name, so an unsuffixed file the page runs escapes the browser rules. ${target.join('/')} runs in the page: name it *.web.ts when only the browser runs it, *.shared.ts when the server runs it too, or import it with \`import type\`.`,
+          })
+        }
+        return {
+          ImportDeclaration: check,
+          ImportExpression: check,
+          ExportNamedDeclaration: check,
+          ExportAllDeclaration: check,
+        }
+      },
+    },
     'api-only-imports': {
       meta: { schema: [] },
       create(context: Context) {
         const own = extensionOf(context.filename)
         if (!own) return {}
-        const browser = context.filename.endsWith('.tsx')
+        const browser = runsInBrowser(context.filename)
         const allowed = browser ? ['refs.ts', 'ui.solid.tsx'] : ['api.ts']
         const how = browser
           ? 'its refs.ts (the refs of its documents and actions) or its ui.solid.tsx (its components, hooks and points)'
@@ -923,7 +954,6 @@ export default {
             return report(node, `${file} is a contract: it imports no node:* module.`)
           const target = source.startsWith('.') ? resolved(context.filename, source) : undefined
           if (file === 'refs.ts') {
-            // The browser imports refs.ts (tsconfig.web.json), so it may not reach server code even for types.
             if (node.importKind !== 'type')
               return target?.[0] === 'shared' || onlyDefineEntry(node)
                 ? undefined
@@ -934,11 +964,12 @@ export default {
             if (
               target &&
               (['server', 'bin', 'lib', 'web'].includes(target[0]) ||
-                (target[0] === 'extensions' && !extensionFile(target, 'refs.ts', 'types.ts')))
+                (target[0] === 'extensions' &&
+                  !extensionFile(target, 'refs.ts', 'types.ts', 'types.shared.ts')))
             )
               report(
                 node,
-                "refs.ts is browser-safe: it imports types only from packages, shared/ and extensions' refs.ts or types.ts.",
+                "refs.ts is browser-safe: it imports types only from packages, shared/ and extensions' refs.ts, types.ts or types.shared.ts.",
               )
             return
           }

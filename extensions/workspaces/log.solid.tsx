@@ -2,7 +2,7 @@ import type { EntryRecord } from '@earendil-works/pi-durable'
 import { GitMerge } from '@lucide/solid'
 import { createMemo, Show } from 'solid-js'
 import { ROOT, useConversationId, useDocOf, useTranscript } from '@/sdk/solid'
-import { LanderLog } from './entries.ts'
+import { LanderLog } from './entries.shared.ts'
 import { LandingCard, Open, Subject } from './landing.solid.tsx'
 import {
   badges,
@@ -16,7 +16,7 @@ import {
   toneOf,
 } from './log-parts.solid.tsx'
 import { LanderReportEntry, WorkspacesDoc } from './refs.ts'
-import { inProgress, superseded, tookFor, visibleSteps } from './steps.ts'
+import { inProgress, superseded, tookFor, visibleSteps } from './steps.web.ts'
 import type { LanderEntry, LanderOutcome, LanderStep } from './types.ts'
 
 const isStep = (data: LanderEntry): data is LanderEntry & LanderStep => data.step !== undefined

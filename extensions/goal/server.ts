@@ -1,4 +1,4 @@
-import { parseConversationId, parseEntryId } from '../../lib/ids.ts'
+import { parseConversationId, parseEntryId } from '../../lib/ids.shared.ts'
 import type { ConversationId, EntryId, Tx } from '@earendil-works/pi-durable'
 import { arr, int, lit, obj, opt, str, union } from '@earendil-works/pi-schema'
 import { strEnum } from '../../lib/schema.ts'
@@ -13,7 +13,7 @@ import {
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { actingAs } from '../../lib/acting-as.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { imagesOf, latestImagesEntry } from '../../lib/entries.ts'
+import { imagesOf, latestImagesEntry } from '../../lib/entries.shared.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { AutomationsApi } from '../automations/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
@@ -21,13 +21,14 @@ import { Standing } from '../subagents/api.ts'
 import { enqueueReminderSync as enqueue, reminderTask } from './reminder.ts'
 import { EndAction, GoalDoc, ImagesAction, StartAction } from './refs.ts'
 import type { Criterion, Decision, Ending, Goal } from './refs.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 export const TRIES = 3
 const TEXT_CHARS = 2000
 
 export const Goals = defineDoc<{ next: number; goals: Goal[] }>({
   kind: GoalDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',

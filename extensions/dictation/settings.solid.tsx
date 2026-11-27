@@ -3,10 +3,9 @@ import { createSignal } from 'solid-js'
 import { Button, buttonVariants } from '@/components/ui/button.solid.tsx'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover.solid.tsx'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control.solid.tsx'
-import { cn, formatKeys } from '@/sdk/solid'
+import { chordOf, cn, formatKeys, sameKeys, useCommands } from '@/sdk/solid'
 import { Switch } from '@/components/ui/switch.solid.tsx'
 import {
-  keyChord,
   setShortcut,
   setSoundCues,
   setTalkMode,
@@ -36,50 +35,62 @@ export function DictationSettings(props: { name: string }) {
         initialFocus="none"
         side="top"
       >
-        <div class="px-3 pt-2.5 pb-1 section-label">Dictation</div>
-        <div class="flex flex-col gap-2.5 px-3 pt-1 pb-2.5 text-muted-foreground">
-          <div class="flex items-center justify-between gap-3">
-            Talk
-            <SegmentedControl
-              aria-label={`Talk mode for ${props.name}`}
-              bind={[talkMode, setTalkMode]}
-            >
-              <SegmentedControlItem value="hold">Hold</SegmentedControlItem>
-              <SegmentedControlItem value="tap">Tap</SegmentedControlItem>
-            </SegmentedControl>
-          </div>
-          <div class="flex items-center justify-between gap-3">
-            Talk shortcut
-            <ShortcutRecorder name={props.name} />
-          </div>
-          <div class="flex items-center justify-between gap-3">
-            Sound cues
-            <Switch
-              aria-label={`Dictation sound cues for ${props.name}`}
-              bind={[soundCues, setSoundCues]}
-            />
-          </div>
-        </div>
+        <DictationOptions name={props.name} />
       </PopoverContent>
     </Popover>
   )
 }
 
+export function DictationOptions(props: { name: string }) {
+  return (
+    <>
+      <div class="px-3 pt-2.5 pb-1 section-label">Dictation</div>
+      <div class="flex flex-col gap-2.5 px-3 pt-1 pb-2.5 text-muted-foreground">
+        <div class="flex items-center justify-between gap-3">
+          Talk
+          <SegmentedControl
+            aria-label={`Talk mode for ${props.name}`}
+            bind={[talkMode, setTalkMode]}
+          >
+            <SegmentedControlItem value="hold">Hold</SegmentedControlItem>
+            <SegmentedControlItem value="tap">Tap</SegmentedControlItem>
+          </SegmentedControl>
+        </div>
+        <div class="flex items-center justify-between gap-3">
+          Talk shortcut
+          <ShortcutRecorder name={props.name} />
+        </div>
+        <div class="flex items-center justify-between gap-3">
+          Sound cues
+          <Switch
+            aria-label={`Dictation sound cues for ${props.name}`}
+            bind={[soundCues, setSoundCues]}
+          />
+        </div>
+      </div>
+    </>
+  )
+}
+
 function ShortcutRecorder(props: { name: string }) {
+  const commands = useCommands()
   const [listening, setListening] = createSignal(false)
+  const [taken, setTaken] = createSignal<string>()
+  const stop = () => {
+    setListening(false)
+    setTaken(undefined)
+  }
   const record = (event: KeyboardEvent) => {
     event.preventDefault()
-    event.stopPropagation()
-    if (event.key === 'Escape') {
-      setListening(false)
-      return
-    }
-    const chord = keyChord(event)
+    if (event.key === 'Escape') return stop()
+    const chord = chordOf(event)
     const hasKey = !['mod', 'ctrl', 'alt', 'shift'].includes(chord.split('+').at(-1)!)
     const hasModifier = chord.includes('+')
-    if (!hasKey || !hasModifier) return
+    if (!hasKey || !hasModifier) return undefined
+    const command = commands().find(({ keys }) => keys && sameKeys(keys, chord))
+    if (command) return setTaken(`${formatKeys(chord).join('+')} is ${command.title}`)
     setShortcut(chord)
-    setListening(false)
+    return stop()
   }
   return (
     <Button
@@ -88,15 +99,14 @@ function ShortcutRecorder(props: { name: string }) {
         'flex h-6 items-center gap-1 rounded-md border border-border/70 px-1.5 font-mono text-[11px] font-normal text-foreground/85 hover:bg-accent',
         listening() && 'border-brand/60 text-brand',
       )}
-      data-dictation-shortcut-recorder={listening() ? '' : undefined}
-      onBlur={() => setListening(false)}
+      onBlur={stop}
       onClick={() => setListening(true)}
       onKeyDown={(event: KeyboardEvent) => listening() && record(event)}
       size={null}
       title="Click, then press a key with a modifier (Ctrl, Alt, Shift); Esc cancels"
       variant={null}
     >
-      {listening() ? 'press keys…' : formatKeys(shortcut())[0].join('+')}
+      {listening() ? (taken() ?? 'press keys…') : formatKeys(shortcut()).join('+')}
     </Button>
   )
 }

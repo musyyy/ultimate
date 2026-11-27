@@ -14,7 +14,7 @@ import { defineTask, InboxDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-d
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { FIRST_CHAPTER } from '../../lib/chapters.ts'
-import { isMissing, settled } from '../../lib/errors.ts'
+import { isMissing, settled } from '../../lib/errors.shared.ts'
 import type { AgentDefinition } from '../../lib/agents.ts'
 import {
   closeOutput,
@@ -39,8 +39,14 @@ import {
   STANDING,
   trimLog,
   WatcherLabel,
-} from './types.ts'
-import type { Manifest, Automation, AutomationListItem, Effect, Subscriber } from './types.ts'
+} from './types.shared.ts'
+import type {
+  Manifest,
+  Automation,
+  AutomationListItem,
+  Effect,
+  Subscriber,
+} from './types.shared.ts'
 
 const owner = {
   ownership: { kind: 'conversation' as const },
@@ -630,30 +636,42 @@ export function supervisor(
           host.notice(`Automation ${id} recovery could not be recorded: ${String(error)}`)
         })
     }
-    async function line(text: string, stdout: boolean) {
+    const pendingLines: { text: string; stdout: boolean }[] = []
+    function line(text: string, stdout: boolean) {
+      pendingLines.push({ text, stdout })
+      if (pendingLines.length === 1) enqueue(lines)
+    }
+    async function lines() {
+      const batch = pendingLines.splice(0)
       if (!run.active) return
       const path = join(dir, 'output.log')
-      await appendFile(path, `${text}\n`)
+      await appendFile(path, batch.map(({ text }) => `${text}\n`).join(''))
       const output = await readFile(path, 'utf8')
       const trimmed = trimLog(output)
       if (trimmed !== output) await writeFile(path, trimmed)
-      const fire = fireText(text, stdout)
-      const done = doneText(text, stdout)
-      if (done !== undefined) run.done = done
+      const fires: string[] = []
+      for (const { text, stdout } of batch) {
+        const fire = fireText(text, stdout)
+        if (fire !== undefined) fires.push(fire)
+        const done = doneText(text, stdout)
+        if (done !== undefined) run.done = done
+      }
       await host.harness().commit(async (tx) => {
         const saved = (await tx.doc(Automations)).automations[id]
         if (!saved || saved.script!.pid !== child.pid || saved.script!.state !== 'running') return
         saved.script!.lastOutputAt = saved.updatedAt = Date.now()
-        if (fire === undefined || run.afterFire) return
-        resetFailuresOnSuccessfulFire(saved)
-        await fireAutomation(tx, saved, Date.now(), fire)
-        if (!saved.enabled) {
-          run.stopped = 'pause'
-          run.afterFire = true
-        } else if (saved.script!.once) {
-          saved.script!.state = 'done'
-          saved.enabled = false
-          run.afterFire = true
+        for (const fire of fires) {
+          if (run.afterFire) return
+          resetFailuresOnSuccessfulFire(saved)
+          await fireAutomation(tx, saved, Date.now(), fire)
+          if (!saved.enabled) {
+            run.stopped = 'pause'
+            run.afterFire = true
+          } else if (saved.script!.once) {
+            saved.script!.state = 'done'
+            saved.enabled = false
+            run.afterFire = true
+          }
         }
       }, BACKGROUND_CONTEXT)
       if (run.afterFire && child.pid) {
@@ -673,16 +691,15 @@ export function supervisor(
         while ((index = pending.indexOf('\n')) !== -1) {
           const text = pending.slice(0, index).replace(/\r$/, '')
           pending = pending.slice(index + 1)
-          enqueue(() => line(text, stdout))
+          line(text, stdout)
         }
         if (Buffer.byteLength(pending) > MAX_UNTERMINATED_OUTPUT_BYTES) {
-          const incompleteNonProtocolLine = pending
+          line(pending, false)
           pending = ''
-          enqueue(() => line(incompleteNonProtocolLine, false))
         }
       })
       stream.on('end', () => {
-        if (pending) enqueue(() => line(pending, stdout))
+        if (pending) line(pending, stdout)
       })
     }
     await run.queue

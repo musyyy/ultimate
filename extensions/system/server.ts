@@ -1,6 +1,6 @@
-import { parseEntryId } from '../../lib/ids.ts'
+import { parseEntryId } from '../../lib/ids.shared.ts'
 import type { ConversationId, EntryId } from '@earendil-works/pi-durable'
-import { parseConversationId } from '../../lib/ids.ts'
+import { parseConversationId } from '../../lib/ids.shared.ts'
 import type { JsonValue } from '@earendil-works/chord/json'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -11,6 +11,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import type { CallRow, CallTree } from '../../server/trace.ts'
 import { LanesAction, NavigatedAction, PollsAction, StreamAction, TreeAction } from './refs.ts'
 import type { Lane, LaneLink, LaneSpawn, SystemCall, SystemFilter, SystemRow } from './refs.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 const SUMMARY = 200
 const cut = (text: string) => (text.length > SUMMARY ? `${text.slice(0, SUMMARY - 1)}…` : text)
@@ -537,7 +538,7 @@ export const pollActions = ['stream', 'lanes', 'tree', 'polls']
 
 const LastView = defineDoc<{ key?: string }>({
   kind: 'system.last-view',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',

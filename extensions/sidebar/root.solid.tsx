@@ -14,7 +14,7 @@ import {
   useDocOf,
   useEvents,
 } from '@/sdk/solid'
-import { parseConversationId } from '../../lib/ids.ts'
+import { parseConversationId } from '../../lib/ids.shared.ts'
 import { Committed } from '../coding-tools/refs.ts'
 import { ActivityAction } from '../conversations/refs.ts'
 import { AgentMark, ConversationPhase, FeatureTag } from '../conversations/ui.solid.tsx'
@@ -30,15 +30,15 @@ import { RunsDoc } from '../subagents/refs.ts'
 import { ProgressAction } from '../workspaces/refs.ts'
 import type { WorkspaceIndex } from '../workspaces/types.ts'
 import { CommitCount, Review } from '../workspaces/ui.solid.tsx'
-import type { Landing } from './landings.ts'
-import { PreviewUp } from './points.ts'
+import type { Landing } from './landings.web.ts'
+import { PreviewUp } from './points.web.ts'
 import { ChildRow, EpicLine, RenameField, RowMenu, useRename } from './rows.solid.tsx'
 import { Section } from './section.solid.tsx'
 import { shell, useData, useSurface } from './state.solid.tsx'
 import type { SidebarConversation } from './state.solid.tsx'
 import { SummaryHistory } from './summaries.solid.tsx'
-import { workOf } from './work.ts'
-import type { Work } from './work.ts'
+import { workOf } from './work.web.ts'
+import type { Work } from './work.web.ts'
 
 export function inFlight(
   conversation: SidebarConversation,

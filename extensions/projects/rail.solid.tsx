@@ -24,9 +24,9 @@ import {
   usePageVisible,
   useViewport,
 } from '@/sdk/solid'
-import { deadline, debounce } from '../../lib/timers.ts'
+import { deadline, debounce } from '../../lib/timers.shared.ts'
 import { ProjectSwatch, RepoLabel, stemOf } from '../sidebar/ui.solid.tsx'
-import { shownPort, target } from './links.ts'
+import { shownPort, target } from './links.web.ts'
 import { ListAction, PinAction } from './refs.ts'
 import type { RunningProject } from './refs.ts'
 

@@ -1,13 +1,15 @@
 import { createEffect, createRoot, createSignal } from 'solid-js'
 import { api, errorMessage, ROOT, useUiState } from '@/sdk/solid'
-import { animationFrames } from '../../lib/timers.ts'
-import { cell } from '../../lib/cell.ts'
-import { inProcess, overshadowed } from '../../lib/errors.ts'
+import { animationFrames } from '../../lib/timers.shared.ts'
+import { cell } from '../../lib/cell.web.ts'
+import { overshadowed } from '../../lib/errors.shared.ts'
 import { SpeakAction } from './refs.ts'
 import type { OpenAiVoice } from './refs.ts'
-import { createPlayer, fetchedVoice, systemVoice, systemVoices } from './speech.ts'
-import type { Sentence } from './speech.ts'
-import { VOICES } from './voices.ts'
+import { createPlayer, fetchedVoice, systemVoice, systemVoices } from './speech.web.ts'
+import type { Sentence } from './speech.web.ts'
+import { VOICES } from './voices.shared.ts'
+
+export const BLOCKED = 'Tap ▶ to let this page play sound'
 
 export const speech = createRoot(() => {
   const [voice, setVoice] = useUiState<'system' | 'openai'>('ext.read-aloud.voice', 'openai')
@@ -32,7 +34,7 @@ export const speech = createRoot(() => {
       )
       return `data:audio/wav;base64,${audio}`
     },
-    audio: () => new Audio(),
+    audio: new Audio(),
     failed: (error) => {
       failure.set({ key: player.state.get().key, message: `OpenAI voice: ${errorMessage(error)}` })
       player.stop()
@@ -48,6 +50,15 @@ export const speech = createRoot(() => {
     engine: () => (openaiOn() ? openai : system),
   })
   createEffect(openaiOn, () => player.switched())
+  for (const type of ['pointerdown', 'pointerup', 'keydown'] as const)
+    addEventListener(
+      type,
+      () => {
+        openai.unlock?.()
+        system.unlock?.()
+      },
+      { capture: true },
+    )
   return {
     ...player,
     load(
@@ -73,12 +84,9 @@ export const speech = createRoot(() => {
     openaiOn,
     warm() {
       if (!openaiOn()) return
-      inProcess(
-        'opening the voice connection early only saves this page time',
-        api
-          .action(SpeakAction, { voice: openaiVoice() }, { conversationId: ROOT })
-          .catch(overshadowed),
-      )
+      void api
+        .action(SpeakAction, { voice: openaiVoice() }, { conversationId: ROOT })
+        .catch(overshadowed)
     },
   }
 })

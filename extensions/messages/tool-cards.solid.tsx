@@ -12,12 +12,12 @@ import {
   useTranscript,
   type ToolCallView,
 } from '@/sdk/solid'
-import { parseConversationId } from '../../lib/ids.ts'
+import { parseConversationId } from '../../lib/ids.shared.ts'
 import { ConversationRef } from '../conversations/ui.solid.tsx'
 import { Bubble } from './bubble.solid.tsx'
-import { callerOf } from './caller.ts'
+import { callerOf } from './caller.shared.ts'
 import { Answers, Body, Navigate, openMessage } from './card-parts.solid.tsx'
-import { outgoingState } from './data.ts'
+import { outgoingState } from './data.web.ts'
 import { MessagesDoc } from './refs.ts'
 import { Address } from './ui.solid.tsx'
 
@@ -151,7 +151,7 @@ export function MessageCall(props: CallProps) {
 export function BranchCall(props: CallProps) {
   const log = useDocOf(() => ROOT, MessagesDoc)
   const started = createMemo(() =>
-    /^Branch #(\d+) started; message (\d+) sent\.$/.exec(props.call.output),
+    /^Branch #(\d+)(?: · .*)? started; message (\d+) sent\.$/.exec(props.call.output),
   )
   const id = () => (started() ? parseConversationId(Number(started()?.[1])) : undefined)
   const message = createMemo(() => log()?.messages.find((m) => m.id === Number(started()?.[2])))

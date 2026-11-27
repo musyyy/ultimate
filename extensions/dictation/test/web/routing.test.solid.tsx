@@ -1,10 +1,16 @@
 import { createSignal, flush, Show } from 'solid-js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { renderSolid } from '../../../../test/web/solid-dom-setup.ts'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@/components/ui/dialog.solid.tsx'
 import { PromptBox } from '@/sdk/solid'
 import type { DictationSink } from '@/sdk/solid'
 import { registry } from '../../../../web/src/sdk/client.ts'
-import { capture } from '../../capture.ts'
+import { capture } from '../../capture.web.ts'
 import { DictationShortcuts, setFallback, setTalkMode } from '../../routing.solid.tsx'
 import dictation from '../../web.solid.tsx'
 
@@ -14,7 +20,12 @@ vi.mock('../../../../web/src/sdk/client.ts', async () => {
   const { createReads } = await import('../../../../web/src/sdk/reads.ts')
   const { createRegistry } = await import('../../../../web/src/sdk/registry.ts')
   const { createUiState } = await import('../../../../web/src/sdk/ui-state.ts')
-  const fetch = async () => Response.json({ result: { available: true } })
+  const settings = { talk: 'tap', shortcut: 'mod+shift+space', cues: true }
+  const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const action = (input as string).split('/').at(-1)
+    if (action === 'setSettings') Object.assign(settings, JSON.parse(init?.body as string).args)
+    return Response.json({ result: action?.endsWith('ettings') ? settings : { available: true } })
+  }
   const store = createStore({ fetch })
   const api = createApi(store, { fetch })
   return {
@@ -111,7 +122,6 @@ function key(type: 'keydown' | 'keyup', handled = true) {
     key: ' ',
     code: 'Space',
     ctrlKey: true,
-    metaKey: true,
     shiftKey: true,
     cancelable: true,
     bubbles: true,
@@ -216,4 +226,43 @@ it('focuses and records into the main composer when neither focus nor fallback s
   await release()
   expect(main.finish).toHaveBeenCalledOnce()
   expect(plain.recording).not.toHaveBeenCalled()
+})
+
+it('the shortcut reaches a prompt box inside a modal dialog, and the main composer behind it is left alone', async () => {
+  const inDialog = sink()
+  const main = sink()
+  renderSolid(() => (
+    <>
+      <DictationShortcuts />
+      <div data-ui="composer" data-composer-target="conversation">
+        <PromptBox
+          draft={undefined}
+          name="main composer"
+          placeholder=""
+          onSubmit={() => Promise.resolve()}
+          dictation={main}
+        />
+      </div>
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Goal</DialogTitle>
+          <DialogDescription>What to do</DialogDescription>
+          <PromptBox
+            draft={undefined}
+            name="goal"
+            placeholder=""
+            onSubmit={() => Promise.resolve()}
+            dictation={inDialog}
+          />
+        </DialogContent>
+      </Dialog>
+    </>
+  ))
+  await vi.advanceTimersByTimeAsync(0)
+  document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!.focus()
+  await press()
+  expect(inDialog.recording).toHaveBeenCalledOnce()
+  await release()
+  expect(inDialog.finish).toHaveBeenCalledOnce()
+  expect(main.recording).not.toHaveBeenCalled()
 })

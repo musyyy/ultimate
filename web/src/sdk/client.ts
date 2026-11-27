@@ -1,9 +1,9 @@
-import { parseConversationId } from '../../../lib/ids.ts'
+import { parseConversationId } from '../../../lib/ids.shared.ts'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { ActionError, actionMessage, createApi } from './api.ts'
 import { createReads } from './reads.ts'
 import { errorMessage } from './format.ts'
-import { deadline } from '../../../lib/timers.ts'
+import { deadline } from '../../../lib/timers.shared.ts'
 import { linkedConversation } from './link.ts'
 import { HOME, createRegistry } from './registry.ts'
 import { createStore } from './store.ts'
@@ -121,15 +121,13 @@ store.subscribe(() => {
   const { shared, ui, system } = store.getState()
   if (system && !registry.getReady().ready) registry.receiveSystem()
 
-  if (system?.web.id && bundle && system.web.id !== bundle) {
-    if (switching) return
+  if (!switching && system?.web.id && bundle && system.web.id !== bundle) {
     switching = true
     sessionStorage.setItem(
       switchKey,
       JSON.stringify({ at: Date.now(), changed: system.web.changed }),
     )
     deadline(reloadNoticeMs, reloadUnlessHeld)
-    return
   }
 
   const process = system && `${system.process.pid}:${system.process.generation}`

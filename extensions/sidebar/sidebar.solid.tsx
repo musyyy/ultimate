@@ -39,7 +39,7 @@ import {
   writerNow,
   writingAs,
 } from '@/sdk/solid'
-import { waitedOn } from '../../lib/waits.ts'
+import { waitedOn } from '../../lib/waits.web.ts'
 import { ConcludeAction, ResumeAction } from '../conversations/refs.ts'
 import type { KeptWork } from '../conversations/types.ts'
 import {
@@ -60,7 +60,7 @@ import { talkToUltimate } from '../subagents/ui.solid.tsx'
 import { PendingAction } from '../workspaces/refs.ts'
 import { Landed, useLandings } from './landed.solid.tsx'
 import { LanderState } from './lander.solid.tsx'
-import { UnderUltimate } from './points.ts'
+import { UnderUltimate } from './points.web.ts'
 import { Project } from './project.solid.tsx'
 import { InFlight, inFlight, MemoryRow, StandingFlights } from './root.solid.tsx'
 import { ChildRow, Row, RowMenu, WaitLines } from './rows.solid.tsx'

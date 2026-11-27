@@ -1,11 +1,11 @@
-import { parseEntryId, offsetEntryId } from '../lib/ids.ts'
+import { parseEntryId, offsetEntryId } from '../lib/ids.shared.ts'
 import type { EntryId, ConversationId, EntryRecord, Harness, Tx } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord/json'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { isDeepStrictEqual } from 'node:util'
 import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { onCommit } from '../lib/commits.ts'
-import { inProcess } from '../lib/errors.ts'
+import { inProcess } from '../lib/errors.shared.ts'
 import { EVENT_FEED, EVENT_FEED_SIZE, NoticeEvent } from '../shared/events.ts'
 import type {
   ChangedEvent,
@@ -18,13 +18,14 @@ import type {
 import { Metadata } from './metadata.ts'
 import { traceContext } from './trace.ts'
 import type { CallTrace } from './trace.ts'
+import { checkpointEvery } from '../shared/checkpoint.ts'
 
 export const EventLog = defineDoc<{
   conversation?: ConversationId
   cursors: Record<string, EntryId>
 }>({
   kind: 'ultimate.events',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -34,7 +35,7 @@ export const EventLog = defineDoc<{
 
 export const EventFeed = defineDoc<{ events: EventRecord[] }>({
   kind: EVENT_FEED,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',

@@ -1,4 +1,4 @@
-import { parseConversationId, offsetEntryId } from '../../lib/ids.ts'
+import { parseConversationId, offsetEntryId } from '../../lib/ids.shared.ts'
 import type { ConversationId, Cursor, EntryId, JsonObject, Tx } from '@earendil-works/pi-durable'
 import { randomUUID } from 'node:crypto'
 import { arr, int, obj, opt, str } from '@earendil-works/pi-schema'
@@ -16,10 +16,11 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { Branch } from '../lineage/api.ts'
 import { SubmissionLanded } from '../workspaces/api.ts'
 import { PlanApi } from './api.ts'
-import { confirmed, criteriaCounts, criteriaOfBody, currentEpic, raise } from './progress.ts'
+import { confirmed, criteriaCounts, criteriaOfBody, currentEpic, raise } from './progress.shared.ts'
 import { PlanDoc, ProgressDoc, TaskIndexDoc } from './refs.ts'
 import type { EpicProgress, Estimate } from './refs.ts'
 import { safeToRerun } from '../../lib/replay.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 export type Task = {
   key: string
@@ -44,7 +45,7 @@ export type Epic = {
 }
 export const Plan = defineDoc<{ next: number; epics: Record<string, Epic> }>({
   kind: PlanDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'rewindable',
@@ -60,7 +61,7 @@ export type TaskLink = {
 }
 export const TaskIndex = defineDoc<{ children: Record<string, TaskLink> }>({
   kind: TaskIndexDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -69,7 +70,7 @@ export const TaskIndex = defineDoc<{ children: Record<string, TaskLink> }>({
 })
 export const Progress = defineDoc<{ epics: Record<string, EpicProgress> }>({
   kind: ProgressDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -79,7 +80,7 @@ export const Progress = defineDoc<{ epics: Record<string, EpicProgress> }>({
 export const docs = [Plan, TaskIndex, Progress]
 const AtomicEditReceipt = defineDoc<{ results: Record<string, string> }>({
   kind: 'ultimate.plan.receipt',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'task',
   initial: () => ({ results: {} }),
@@ -128,7 +129,7 @@ async function indexAndNameChildren(
 
 export const Started = defineDoc<{ started?: true }>({
   kind: 'plan.started',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',

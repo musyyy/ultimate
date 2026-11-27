@@ -1,4 +1,4 @@
-import { parseEntryId, parseConversationId } from '../../lib/ids.ts'
+import { parseEntryId, parseConversationId } from '../../lib/ids.shared.ts'
 import type {
   ConversationId,
   GenerationResult,
@@ -24,11 +24,11 @@ import { Standing, SubagentsApi } from '../subagents/api.ts'
 import { LineageApi, Replies } from '../lineage/api.ts'
 import { Judgements, Messages, MessagesApi } from './api.ts'
 import { gist, openQuestion, openQuestionsNote, questionsParameter } from './questions.ts'
-import { callerOf } from './caller.ts'
+import { callerOf } from './caller.shared.ts'
 import { CallerAction, SettleAction } from './refs.ts'
 import type { Via } from './refs.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { isOwed } from '../../lib/message-state.ts'
+import { isOwed } from '../../lib/message-state.shared.ts'
 import { actingAs } from '../../lib/acting-as.ts'
 import { imagesParameter, SCAN_PAGE } from './images.ts'
 import { owed, parentOf, Serving, Started, starterOf } from './addresses.ts'

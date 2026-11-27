@@ -1,4 +1,4 @@
-import { parseEntryId, parseConversationId } from '../../lib/ids.ts'
+import { parseEntryId, parseConversationId } from '../../lib/ids.shared.ts'
 import { bool, num, obj, opt, str } from '@earendil-works/pi-schema'
 import { configure, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -146,11 +146,13 @@ export const branchTool = (host: ExtensionHost) =>
               requestId: `sidechat:branch:${api.taskId}:${api.callId}`,
             },
           )
+      const title = (await host.harness().snapshot(host.metadata, parseConversationId(id), ctx))
+        ?.title
       return {
         output: [
           {
             type: 'text',
-            text: `Branch #${id} started; message ${message} sent.`,
+            text: `Branch #${id}${title ? ` · ${title}` : ''} started; message ${message} sent.`,
           },
         ],
       }

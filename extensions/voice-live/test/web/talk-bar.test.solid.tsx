@@ -1,9 +1,10 @@
 import { createSignal, flush, Show } from 'solid-js'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { parseConversationId } from '../../../../lib/ids.shared.ts'
+import { serverEndedSession } from './session.ts'
 import { renderSolid } from '../../../../test/web/solid-dom-setup.ts'
 import { capture } from '../../../dictation/ui.solid.tsx'
-import { composeIn, dock, endSession, settleTranscripts, voiceSink } from '../../dock.solid.tsx'
+import { composeIn, dock, settleTranscripts, voiceSink } from '../../dock.solid.tsx'
 import { TalkBar } from '../../talk.solid.tsx'
 
 const harness = vi.hoisted(() => ({
@@ -96,7 +97,7 @@ const touch = (type: string, pointerId = 1) =>
   new PointerEvent(type, { bubbles: true, pointerId, pointerType: 'touch' })
 
 beforeEach(async () => {
-  await endSession()
+  await serverEndedSession(composeIn)
   harness.calls.length = 0
   dock.setCollect(false)
   composeIn(parseConversationId(40))

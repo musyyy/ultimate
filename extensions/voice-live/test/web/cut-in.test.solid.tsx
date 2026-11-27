@@ -1,7 +1,8 @@
+import { serverEndedSession } from './session.ts'
 import { createRoot, createSignal, flush } from 'solid-js'
 import { expect, it, vi } from 'vitest'
 import { speech } from '../../../read-aloud/ui.solid.tsx'
-import { endSession, sendTyped, dock, useSpeaking } from '../../dock.solid.tsx'
+import { composeIn, sendTyped, dock, useSpeaking } from '../../dock.solid.tsx'
 import type { TurnView } from '../../dock.solid.tsx'
 
 const harness = vi.hoisted(() => ({
@@ -130,7 +131,7 @@ it('cutting in stops the earlier reply’s speech and its turn, and what it stre
 })
 
 it('turning Speak replies on mid-reply plays from the first new sentence, at its place in the reply', async () => {
-  await endSession()
+  await serverEndedSession(composeIn)
   dock.setSpeak(false)
   said.length = 0
   const before = harness.turns.length
